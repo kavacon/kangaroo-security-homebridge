@@ -1,0 +1,44 @@
+{
+  "name": "kangaroo-secutiry-homebridge",
+  "version": "1.0.0",
+  "description": "Utility package to connect kangaroo security to homebridge",
+  "main": "dist/platform.js",
+  "scripts": {
+    "build": "tsc --build",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kavacon/kangaroo-security-homebridge.git"
+  },
+  "engines": {
+    "node": ">=0.12.0",
+    "homebridge": ">=0.4.53"
+  },
+  "keywords": [
+    "kangaroo",
+    "security",
+    "doorbell",
+    "homebridge",
+    "homekit",
+    "homebridge-plugin"
+  ],
+  "author": "Constantinos Kavadias",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/kavacon/kangaroo-security-homebridge/issues"
+  },
+  "homepage": "https://github.com/kavacon/kangaroo-security-homebridge#readme",
+  "dependencies": {
+    "@types/node-fetch": "^3.0.3",
+    "node-dns-sd": "^0.4.2",
+    "node-fetch": "^2.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^14.18.11",
+    "hap-nodejs": "^0.9.8",
+    "homebridge": "^1.3.9",
+    "tslint": "^6.1.3",
+    "typescript": "^4.3.2"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "pluginAlias": "KangarooSecurity",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "required": true,
+        "default": "KangarooSecurity"
+      },
+      "phone": {
+        "title": "phone number registered with kangaroo",
+        "type": "string",
+        "required": true,
+        "default": "+61400000000"
+      },
+      "security_code": {
+        "title": "security code sent to phone number",
+        "type": "string",
+        "required": true,
+        "default": "xxxxxx"
+      }
+    }
+  }
+}
