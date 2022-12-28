@@ -31,7 +31,6 @@
   "homepage": "https://github.com/kavacon/kangaroo-security-homebridge#readme",
   "dependencies": {
     "@types/node-fetch": "^3.0.3",
-    "node-dns-sd": "^0.4.2",
     "node-fetch": "^2.6.6"
   },
   "devDependencies": {
