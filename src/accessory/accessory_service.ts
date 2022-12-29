@@ -1,38 +1,53 @@
 import {Device, DeviceType, KangarooContext} from "../model";
-import video_doorbell from "./video_doorbell";
+import {configureVideoDoorbell, updateVideoDoorbell} from "./video_doorbell";
 import {Logging, PlatformAccessory, Service, API, HAP, Categories} from "homebridge";
+import {getDevice} from "../client";
 
-export class AccessoryBuilder {
+export class AccessoryService {
     private readonly log: Logging;
     private api: API;
     private readonly hap: HAP;
-    private readonly homeId: string;
     private readonly tempStorage: string;
 
-    constructor(log: Logging, api: API, hap: HAP, homeId: string, tempStorage: string) {
+    constructor(log: Logging, api: API, hap: HAP, tempStorage: string) {
         this.log = log;
         this.api = api;
         this.hap = hap;
-        this.homeId = homeId;
         this.tempStorage = tempStorage
     }
 
-    fromDevice(device: Device): { accessory: PlatformAccessory<KangarooContext>; cleanup?: () => void } {
+    fromDevice(device: Device, homeId: string): { accessory: PlatformAccessory<KangarooContext>; cleanup?: () => void } {
         this.log.info("Creating Accessory with Name : [%s], device type : [%s], Firmware: [%s] ",
             device.deviceName, device.deviceType, device.fwVersion);
 
         switch (device.deviceType) {
             case DeviceType.DOORCAM:
-                const accessory = this.buildBasicAccessory(device, Categories.VIDEO_DOORBELL)
-                return video_doorbell(this.log, this.hap, this.tempStorage, device, accessory)
+                const accessory = this.buildBasicAccessory(device, homeId, Categories.VIDEO_DOORBELL)
+                return configureVideoDoorbell(this.log, this.hap, this.tempStorage, device, accessory)
             default:
                 throw new Error(`unknown device type" ${device.deviceType}`);
         }
     }
 
-    private buildBasicAccessory(device: Device, category: Categories): PlatformAccessory<KangarooContext> {
+    updateAccessory(accessory: PlatformAccessory<KangarooContext>): Promise<{ accessory: PlatformAccessory<KangarooContext>; cleanup?: () => void }> {
+        const res = getDevice(accessory.context.homeId, accessory.context.deviceId);
+        return res.then( device => {
+            const service = accessory.getService(this.hap.Service.AccessoryInformation);
+            service?.getCharacteristic(this.hap.Characteristic.FirmwareRevision).updateValue(device.fwVersion)
+            service?.getCharacteristic(this.hap.Characteristic.Name).updateValue(device.deviceName)
+
+            switch (device.deviceType) {
+                case DeviceType.DOORCAM:
+                    return updateVideoDoorbell(this.log, this.hap, this.tempStorage, device, accessory)
+                default:
+                    throw new Error(`unknown device type" ${device.deviceType}`);
+            }
+        })
+    }
+
+    private buildBasicAccessory(device: Device, homeId: string, category: Categories): PlatformAccessory<KangarooContext> {
         const context: KangarooContext = {
-            homeId: this.homeId,
+            homeId,
             deviceId: device.deviceId,
             deviceType: device.deviceType,
         }

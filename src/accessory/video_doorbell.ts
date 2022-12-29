@@ -3,7 +3,7 @@ import {AlarmType, Device, DOORBELL_ALARM, KangarooContext, MOTION_ALARM} from "
 import {getDevice, nonDismissedAlarms, updateDeviceCam} from "../client";
 import {StreamingDelegate} from "../camera/streaming_delegate"
 
-export default (log: Logging, hap: HAP, tempStorage: string, device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void} => {
+export function configureVideoDoorbell(log: Logging, hap: HAP, tempStorage: string, device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void} {
     accessory.addService(configureDoorbell(hap));
     accessory.addService(configureMotionSensor(hap));
     accessory.addService(configureCamera(hap))
@@ -11,6 +11,17 @@ export default (log: Logging, hap: HAP, tempStorage: string, device: Device, acc
     const videoConfig = { deviceId: device.deviceId, homeId: accessory.context.homeId }
     const delegate = new StreamingDelegate(log, videoConfig, hap, device.deviceName, tempStorage);
     accessory.configureController(delegate.controller);
+    return { accessory, cleanup: delegate.shutdown };
+}
+
+export function updateVideoDoorbell(log: Logging, hap: HAP, tempStorage: string, device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void}  {
+    const videoConfig = { deviceId: device.deviceId, homeId: accessory.context.homeId }
+    const delegate = new StreamingDelegate(log, videoConfig, hap, device.deviceName, tempStorage);
+    accessory.configureController(delegate.controller);
+
+    const cameraService = accessory.getService(hap.Service.CameraOperatingMode);
+    cameraService?.getCharacteristic(hap.Characteristic.HomeKitCameraActive).updateValue(device.online);
+    cameraService?.getCharacteristic(hap.Characteristic.NightVision).updateValue(device.irLed);
     return { accessory, cleanup: delegate.shutdown };
 }
 
