@@ -1,6 +1,6 @@
 import {MacAddress} from "homebridge/lib/util/mac";
 
-enum DeviceType {
+export enum DeviceType {
     DOORCAM,
 }
 
@@ -8,8 +8,10 @@ enum Country {
     AU,
 }
 
+export const DOORBELL_ALARM = 108;
+export const MOTION_ALARM = 101;
 type BatteryStatus = 'ok';
-type AlarmType = 108;
+export type AlarmType = typeof DOORBELL_ALARM | typeof MOTION_ALARM | 3 | 1;
 type ArmType = 2;
 type OwnershipType = 'owner' | 'renter';
 

@@ -2,8 +2,9 @@ import fetch from 'node-fetch';
 import {Account, Alarm, Device} from "./model";
 
 const BASE_URL = 'https://api.heykangaroo.com/v1/me'
+let authToken = '';
 
-function send(url: string, method: string, body?: string): Promise<string> {
+function send(url: string, method: string, body?: any): Promise<string> {
     return fetch(url, {
         method,
         headers: {
@@ -18,8 +19,18 @@ export function devicesAndTags(homeId: string): Promise<Device[]> {
         .then(result => JSON.parse(result))
 }
 
-export function device(homeId: string, deviceId: string): Promise<Device> {
+export function getDevice(homeId: string, deviceId: string): Promise<Device> {
     return send(`${BASE_URL}/homes/${homeId}/devices/${deviceId}`, 'GET')
+        .then(result => JSON.parse(result))
+}
+
+export function updateDevice(homeId: string, deviceId: string, update: Partial<Device>): Promise<Device> {
+    return send(`${BASE_URL}/homes/${homeId}/devices/${deviceId}`, 'PUT', update)
+        .then(result => JSON.parse(result))
+}
+
+export function updateDeviceCam(homeId: string, deviceId: string, update: Partial<Device>): Promise<Device> {
+    return send(`${BASE_URL}/homes/${homeId}/devices/${deviceId}/doorCamAlertSetting`, 'PUT', update)
         .then(result => JSON.parse(result))
 }
 
@@ -29,6 +40,10 @@ export function nonDismissedAlarms(homeId: string): Promise<Alarm[]> {
 }
 
 export function account(): Promise<Account> {
-    return send(BASE_URL, 'POST')
+    return send(BASE_URL, 'GET')
         .then(result => JSON.parse(result))
+}
+
+export function updateAuth(token: string) {
+    authToken = token;
 }
