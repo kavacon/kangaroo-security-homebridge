@@ -1,49 +1,51 @@
 import fetch from 'node-fetch';
 import {Account, Alarm, Device} from "./model";
+import {Logging} from "homebridge";
 
 const BASE_URL = 'https://api.heykangaroo.com/v1/me'
 let authToken = '';
+let log: Logging;
 
-function send(url: string, method: string, body?: any): Promise<string> {
+function send<T>(url: string, method: string, body?: any): Promise<T> {
     return fetch(url, {
         method,
         headers: {
             'Content-Type': 'application/json',
+            'X-Authorization': authToken,
         },
         body: JSON.stringify(body)
-    });
+    }).then( result => result.json());
 }
 
 export function devicesAndTags(homeId: string): Promise<Device[]> {
     return send(`${BASE_URL}/homes/${homeId}/devicesAndTags`, 'GET')
-        .then(result => JSON.parse(result))
 }
 
 export function getDevice(homeId: string, deviceId: string): Promise<Device> {
     return send(`${BASE_URL}/homes/${homeId}/devices/${deviceId}`, 'GET')
-        .then(result => JSON.parse(result))
 }
 
 export function updateDevice(homeId: string, deviceId: string, update: Partial<Device>): Promise<Device> {
     return send(`${BASE_URL}/homes/${homeId}/devices/${deviceId}`, 'PUT', update)
-        .then(result => JSON.parse(result))
 }
 
 export function updateDeviceCam(homeId: string, deviceId: string, update: Partial<Device>): Promise<Device> {
-    return send(`${BASE_URL}/homes/${homeId}/devices/${deviceId}/doorCamAlertSetting`, 'PUT', update)
-        .then(result => JSON.parse(result))
+    return send<Device>(`${BASE_URL}/homes/${homeId}/devices/${deviceId}/doorCamAlertSetting`, 'PUT', update)
 }
 
 export function nonDismissedAlarms(homeId: string): Promise<Alarm[]> {
-    return send(`${BASE_URL}/homes/${homeId}/alarms/nondismissed`, 'GET')
-        .then(result => JSON.parse(result))
+    return send<Alarm[]>(`${BASE_URL}/homes/${homeId}/alarms/nondismissed`, 'GET')
 }
 
 export function account(): Promise<Account> {
-    return send(BASE_URL, 'GET')
-        .then(result => JSON.parse(result))
+    return send<Account>(BASE_URL, 'GET')
+        .then(result => {log.debug(JSON.stringify(result, null, 4)); return result})
 }
 
 export function updateAuth(token: string) {
     authToken = token;
+}
+
+export function setLog(logging: Logging) {
+    log = logging
 }

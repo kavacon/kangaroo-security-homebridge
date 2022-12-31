@@ -11,12 +11,6 @@
         "required": true,
         "default": "KangarooSecurity"
       },
-      "tempStorage": {
-        "title": "folder for downloading ephemeral files",
-        "type": "string",
-        "required": false,
-        "default": "/tmp"
-      },
       "phone": {
         "title": "phone number registered with kangaroo",
         "type": "string",

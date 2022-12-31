@@ -65,19 +65,16 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     private readonly cameraName: string;
     private readonly config: VideoConfig;
     private readonly videoProcessor: string;
-    private readonly tmpStorage: string;
     readonly controller: CameraController;
-    private snapshotPromise?: Promise<Buffer>;
 
     // keep track of sessions
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
-    constructor(log: Logger, config: VideoConfig, hap: HAP, cameraName: string, tmpStorage: string) {
+    constructor(log: Logger, config: VideoConfig, hap: HAP, cameraName: string) {
         this.log = log;
         this.hap = hap;
         this.config = config;
-        this.tmpStorage = `${tmpStorage}/${config.homeId}/${config.deviceId}`;
 
         this.cameraName = cameraName;
         this.videoProcessor = ffmpegPath || 'ffmpeg';
@@ -156,7 +153,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     }
 
     fetchSnapshot(snapFilter?: string): Promise<Buffer> {
-        this.snapshotPromise = getDevice(this.config.homeId, this.config.deviceId).
+        return getDevice(this.config.homeId, this.config.deviceId).
         then((device) => {
             return new Promise( (resolve, reject) => {
                 const startTime = Date.now();
@@ -191,10 +188,6 @@ export class StreamingDelegate implements CameraStreamingDelegate {
                         reject('Failed to fetch snapshot.');
                     }
 
-                    setTimeout(() => {
-                        this.snapshotPromise = undefined;
-                    }, 3 * 1000); // Expire cached snapshot after 3 seconds
-
                     const runtime = (Date.now() - startTime) / 1000;
                     let message = 'Fetching snapshot took ' + runtime + ' seconds.';
                     if (runtime < 5) {
@@ -210,7 +203,6 @@ export class StreamingDelegate implements CameraStreamingDelegate {
                 });
             });
         });
-        return this.snapshotPromise;
     }
 
     resizeSnapshot(snapshot: Buffer, resizeFilter?: string): Promise<Buffer> {
@@ -241,16 +233,13 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         const resolution = this.determineResolution(request, true);
 
         try {
-            const cachedSnapshot = !!this.snapshotPromise;
-
             this.log.debug('Snapshot requested: ' + request.width + ' x ' + request.height,
                 this.cameraName, this.config.debug);
 
-            const snapshot = await (this.snapshotPromise || this.fetchSnapshot(resolution.snapFilter));
+            const snapshot = await this.fetchSnapshot(resolution.snapFilter);
 
             this.log.debug('Sending snapshot: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
-                (resolution.height > 0 ? resolution.height : 'native') +
-                (cachedSnapshot ? ' (cached)' : ''), this.cameraName, this.config.debug);
+                (resolution.height > 0 ? resolution.height : 'native'), this.cameraName, this.config.debug);
 
             const resized = await this.resizeSnapshot(snapshot, resolution.resizeFilter);
             callback(undefined, resized);
@@ -344,8 +333,15 @@ export class StreamingDelegate implements CameraStreamingDelegate {
                 (resolution.height > 0 ? resolution.height : 'native') + ', ' + (fps > 0 ? fps : 'native') +
                 ' fps, ' + (videoBitrate > 0 ? videoBitrate : '???') + ' kbps', this.cameraName);
 
-            const framesListFile = await this.downloadPhotoStitch();
-            let ffmpegArgs = `-framerate ${fps > 0 ? fps : 30} -f concat -i ${framesListFile}`;
+            let ffmpegArgs = '';
+            try {
+                const { inputString, frameCount } = await this.photoStitchInputString();
+                ffmpegArgs = `-framerate ${fps > 0 ? fps : 30} -f concat ${inputString} -safe 0`;
+            } catch (e) {
+                this.log.error(`error encountered when starting video stream for %s, error: %s`, this.config.deviceId, JSON.stringify(e))
+                this.stopStream(request.sessionID);
+                return;
+            }
 
             ffmpegArgs += // Video
                 (this.config.mapvideo ? ' -map ' + this.config.mapvideo : ' -an -sn -dn') +
@@ -442,21 +438,9 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         this.log.info('Stopped video stream.', this.cameraName);
     }
 
-
-    private async downloadPhotoStitch(): Promise<string> {
+    private async photoStitchInputString(): Promise<{inputString: string, frameCount: number }> {
         const device = await getDevice(this.config.homeId, this.config.deviceId);
-        const images: string[] = []
-        device.lastAlarm.images.forEach(
-            async(image, index) => {
-                const res = await fetch(image);
-                const path = `${this.tmpStorage}/${device.lastAlarm.alarmId}_${index}.jpg`
-                res.body.pipe(fs.createWriteStream(path))
-                images.push(path);
-            }
-        );
-
-        const outputFile = `${this.tmpStorage}/config.txt`
-        fs.writeFileSync( outputFile, images.join('\n'))
-        return outputFile;
+        const inputString = '-i ' + device.lastAlarm.images.join(' -i ');
+        return { inputString, frameCount: device.lastAlarm.images.length };
     }
 }

@@ -1,11 +1,11 @@
 import {MacAddress} from "homebridge/lib/util/mac";
 
 export enum DeviceType {
-    DOORCAM,
+    DOORCAM = "DOORCAM",
 }
 
 enum Country {
-    AU,
+    AU = "AU",
 }
 
 export const DOORBELL_ALARM = 108;
