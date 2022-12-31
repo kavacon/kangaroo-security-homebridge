@@ -1,7 +1,7 @@
 import {Device, DeviceType, KangarooContext} from "../model";
 import {VideoDoorbellService} from "./video_doorbell";
-import {Logging, PlatformAccessory, API, HAP, Categories} from "homebridge";
-import {getDevice} from "../client";
+import {Logging, PlatformAccessory, API, HAP, Categories, CharacteristicValue} from "homebridge";
+import {getDevice, updateDevice} from "../client";
 
 export class AccessoryService {
     private readonly log: Logging;
@@ -60,6 +60,13 @@ export class AccessoryService {
             .setCharacteristic(this.hap.Characteristic.Manufacturer, 'kangaroo')
             .setCharacteristic(this.hap.Characteristic.Model, device.deviceModel)
             .setCharacteristic(this.hap.Characteristic.FirmwareRevision, ''+device.fwVersion);
+
+        accessoryInformation.getCharacteristic(this.hap.Characteristic.Name)
+            .onSet((value: CharacteristicValue, _) => {
+                return updateDevice(homeId, device.deviceId, { deviceName: ''+value })
+                    .then(device => device.deviceName)
+            });
+        this.log.warn(`information ${accessoryInformation.UUID}`);
         accessory.context = context;
         return accessory;
     }

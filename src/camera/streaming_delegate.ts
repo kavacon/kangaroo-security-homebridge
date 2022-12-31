@@ -1,10 +1,9 @@
 // adapted from https://github.com/Sunoo/homebridge-camera-ffmpeg/blob/master/src/streamingDelegate.ts
 // changed to dynamically retrieve and stitch feed from remote images
 import {
-    CameraController,
-    CameraControllerOptions,
     CameraStreamingDelegate,
-    HAP, Logger,
+    HAP,
+    Logger,
     PrepareStreamCallback,
     PrepareStreamRequest,
     PrepareStreamResponse,
@@ -24,8 +23,7 @@ import pickPort, { pickPortOptions } from 'pick-port';
 import { VideoConfig } from './config';
 import { FfmpegProcess } from './ffmpeg';
 import {getDevice} from "../client";
-import * as fs from "fs";
-import fetch from 'node-fetch';
+import EventEmitter from "events";
 
 type SessionInfo = {
     address: string; // address of the HAP controller
@@ -59,54 +57,30 @@ type ActiveSession = {
     socket?: Socket;
 };
 
-export class StreamingDelegate implements CameraStreamingDelegate {
+export declare interface StreamingDelegate extends CameraStreamingDelegate {
+    on(event: 'stream_error', listener: (sessionID: string) => void): this;
+    emit(event: 'stream_error', sessionID: string): boolean;
+}
+
+export class StreamingDelegate extends EventEmitter {
     private readonly hap: HAP;
     private readonly log: Logger;
     private readonly cameraName: string;
     private readonly config: VideoConfig;
     private readonly videoProcessor: string;
-    readonly controller: CameraController;
 
     // keep track of sessions
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
     constructor(log: Logger, config: VideoConfig, hap: HAP, cameraName: string) {
+        super();
         this.log = log;
         this.hap = hap;
         this.config = config;
 
         this.cameraName = cameraName;
         this.videoProcessor = ffmpegPath || 'ffmpeg';
-
-        const options: CameraControllerOptions = {
-            cameraStreamCount: this.config.maxStreams || 2, // HomeKit requires at least 2 streams, but 1 is also just fine
-            delegate: this,
-            streamingOptions: {
-                supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
-                video: {
-                    resolutions: [
-                        [320, 180, 30],
-                        [320, 240, 15], // Apple Watch requires this configuration
-                        [320, 240, 30],
-                        [480, 270, 30],
-                        [480, 360, 30],
-                        [640, 360, 30],
-                        [640, 480, 30],
-                        [1280, 720, 30],
-                        [1280, 960, 30],
-                        [1920, 1080, 30],
-                        [1600, 1200, 30]
-                    ],
-                    codec: {
-                        profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
-                        levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0]
-                    }
-                },
-            }
-        };
-
-        this.controller = new hap.CameraController(options);
     }
 
     private determineResolution(request: SnapshotRequest | VideoInfo, isSnapshot: boolean): ResolutionInfo {
@@ -378,14 +352,14 @@ export class StreamingDelegate implements CameraStreamingDelegate {
                 }
                 activeSession.timeout = setTimeout(() => {
                     this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
-                    this.controller.forceStopStreamingSession(request.sessionID);
+                    this.emit('stream_error', request.sessionID);
                     this.stopStream(request.sessionID);
                 }, request.video.rtcp_interval * 5 * 1000);
             });
             activeSession.socket.bind(sessionInfo.videoReturnPort);
 
             activeSession.mainProcess = new FfmpegProcess(this.cameraName, request.sessionID, this.videoProcessor,
-                ffmpegArgs, this.log, this.config.debug, this.stopStream.bind(this), this.controller.forceStopStreamingSession.bind(this.controller), callback);
+                ffmpegArgs, this.log, this.config.debug, this.stopStream.bind(this), (sessionID) => this.emit('stream_error', sessionID), callback);
 
             this.ongoingSessions.set(request.sessionID, activeSession);
             this.pendingSessions.delete(request.sessionID);

@@ -1,14 +1,15 @@
 import {
+    CameraControllerOptions, CameraStreamingDelegate,
     CharacteristicGetHandler,
     CharacteristicSetHandler,
-    CharacteristicValue,
+    CharacteristicValue, DoorbellOptions,
     HAP,
     Logging, Nullable,
     PlatformAccessory,
     Service
 } from "homebridge";
-import {AlarmType, Device, DOORBELL_ALARM, KangarooContext, MOTION_ALARM} from "../model";
-import {getDevice, nonDismissedAlarms, updateDeviceCam} from "../client";
+import { Device, KangarooContext } from "../model";
+import {getDevice, updateDeviceCam} from "../client";
 import {StreamingDelegate} from "../camera/streaming_delegate"
 
 export class VideoDoorbellService {
@@ -22,35 +23,55 @@ export class VideoDoorbellService {
     
     configure(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
         const { context } = accessory;
-        accessory.addService(this.configureDoorbell(context));
-        accessory.addService(this.configureMotionSensor(context));
-        accessory.addService(this.configureCamera(device, context))
+        const cameraOperatingMode = this.configureCamera(device, context);
+        accessory.addService(cameraOperatingMode);
 
         const videoConfig = {deviceId: device.deviceId, homeId: context.homeId}
         const delegate = new StreamingDelegate(this.log, videoConfig, this.hap, device.deviceName);
-        accessory.configureController(delegate.controller);
-        return {accessory, cleanup: () => { accessory.removeController(delegate.controller); delegate.shutdown() }};
+        const doorbellOptions = this.getDoorbellControllerOptions(delegate, device.deviceName)
+        const doorbellController = new this.hap.DoorbellController(doorbellOptions);
+        delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
+
+        accessory.configureController(doorbellController);
+        return {accessory, cleanup: () => { accessory.removeController(doorbellController); delegate.shutdown() }};
     }
     
     update(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
-        accessory.removeService(accessory.getService(this.hap.Service.Doorbell)!);
-        accessory.removeService(accessory.getService(this.hap.Service.MotionSensor)!);
         accessory.removeService(accessory.getService(this.hap.Service.CameraOperatingMode)!);
         return this.configure(device, accessory);
     }
 
-    private configureDoorbell(context: KangarooContext): Service {
-        const doorbellService = new this.hap.Service.Doorbell()
-        const button = doorbellService.getCharacteristic(this.hap.Characteristic.ProgrammableSwitchEvent);
-        button.onGet(this.getWith(context, context => VideoDoorbellService.isActiveAlarmType(DOORBELL_ALARM, context).then(result => result ? this.hap.Characteristic.ProgrammableSwitchEvent.SINGLE_PRESS : null)));
-        return doorbellService;
-    }
-
-    private configureMotionSensor(context: KangarooContext): Service {
-        const motionSensorService = new this.hap.Service.MotionSensor();
-        const motionSensor = motionSensorService.getCharacteristic(this.hap.Characteristic.MotionDetected);
-        motionSensor.onGet(this.getWith(context, context => VideoDoorbellService.isActiveAlarmType(MOTION_ALARM, context)));
-        return motionSensorService;
+    private getDoorbellControllerOptions(delegate: CameraStreamingDelegate, name: string): DoorbellOptions & CameraControllerOptions {
+        return {
+            cameraStreamCount: 2, // HomeKit requires at least 2 streams, but 1 is also just fine
+            delegate: delegate,
+            streamingOptions: {
+                supportedCryptoSuites: [this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
+                video: {
+                    resolutions: [
+                        [320, 180, 30],
+                        [320, 240, 15], // Apple Watch requires this configuration
+                        [320, 240, 30],
+                        [480, 270, 30],
+                        [480, 360, 30],
+                        [640, 360, 30],
+                        [640, 480, 30],
+                        [1280, 720, 30],
+                        [1280, 960, 30],
+                        [1920, 1080, 30],
+                        [1600, 1200, 30]
+                    ],
+                    codec: {
+                        profiles: [this.hap.H264Profile.BASELINE, this.hap.H264Profile.MAIN, this.hap.H264Profile.HIGH],
+                        levels: [this.hap.H264Level.LEVEL3_1, this.hap.H264Level.LEVEL3_2, this.hap.H264Level.LEVEL4_0]
+                    }
+                },
+            },
+            sensors: {
+                motion: true
+            },
+            name,
+        };
     }
 
     private configureCamera(device: Device, context: KangarooContext): Service {
@@ -114,14 +135,5 @@ export class VideoDoorbellService {
         }
         return updateDeviceCam(context.homeId, context.deviceId, {irLed: false})
             .then(_ => false);
-    }
-
-    private static isActiveAlarmType(type: AlarmType, context: KangarooContext): Promise<boolean> {
-        const res = nonDismissedAlarms(context.homeId)
-        return res.then(
-            alarms => {
-                return alarms.some(a => a.deviceId === context.deviceId && a.alarmType == type);
-            }
-        );
     }
 }
