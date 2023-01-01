@@ -24,6 +24,7 @@ import { VideoConfig } from './config';
 import { FfmpegProcess } from './ffmpeg';
 import {Client} from "../client/client";
 import EventEmitter from "events";
+import {Alarm} from "../model";
 
 type SessionInfo = {
     address: string; // address of the HAP controller
@@ -69,12 +70,13 @@ export class StreamingDelegate extends EventEmitter {
     private readonly config: VideoConfig;
     private readonly videoProcessor: string;
     private readonly client: Client
+    private snapshot: Promise<Buffer>;
 
     // keep track of sessions
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
-    constructor(log: Logger, config: VideoConfig, hap: HAP, client: Client, cameraName: string) {
+    constructor(log: Logger, config: VideoConfig, hap: HAP, client: Client, cameraName: string, initialAlarm: Alarm) {
         super();
         this.log = log;
         this.hap = hap;
@@ -83,6 +85,7 @@ export class StreamingDelegate extends EventEmitter {
 
         this.cameraName = cameraName;
         this.videoProcessor = ffmpegPath || 'ffmpeg';
+        this.snapshot = this.fetchSnapshot(initialAlarm.images[0]);
     }
 
     private determineResolution(request: SnapshotRequest | VideoInfo, isSnapshot: boolean): ResolutionInfo {
@@ -128,55 +131,55 @@ export class StreamingDelegate extends EventEmitter {
         }
     }
 
-    fetchSnapshot(snapFilter?: string): Promise<Buffer> {
-        return this.client.getDevice(this.config.homeId, this.config.deviceId).
-        then((device) => {
-            return new Promise( (resolve, reject) => {
-                const startTime = Date.now();
-                const ffmpegArgs = `-i ${device.lastAlarm.images[0]}` + // Still
-                    ' -frames:v 1' +
-                    (snapFilter ? ' -filter:v ' + snapFilter : '') +
-                    ' -f image2 -' +
-                    ' -hide_banner' +
-                    ' -loglevel error';
+    updateAlarm(alarm: Alarm) {
+        this.snapshot = this.fetchSnapshot(alarm.images[0]);
+    }
 
-                this.log.debug('Snapshot command: ' + this.videoProcessor + ' ' + ffmpegArgs, this.cameraName, this.config.debug);
-                const ffmpeg = spawn(this.videoProcessor, ffmpegArgs.split(/\s+/), {env: process.env});
+    fetchSnapshot(imageUrl: string): Promise<Buffer> {
+        return new Promise( (resolve, reject) => {
+            const startTime = Date.now();
+            const ffmpegArgs = `-i ${imageUrl}` + // Still
+                ' -frames:v 1' +
+                ' -f image2 -' +
+                ' -hide_banner' +
+                ' -loglevel error';
 
-                let snapshotBuffer = Buffer.alloc(0);
-                ffmpeg.stdout.on('data', (data) => {
-                    snapshotBuffer = Buffer.concat([snapshotBuffer, data]);
-                });
-                ffmpeg.on('error', (error: Error) => {
-                    throw Error('FFmpeg process creation failed: ' + error.message);
-                });
-                ffmpeg.stderr.on('data', (data) => {
-                    data.toString().split('\n').forEach((line: string) => {
-                        if (this.config.debug && line.length > 0) { // For now only write anything out when debug is set
-                            this.log.error(line, this.cameraName + '] [Snapshot');
-                        }
-                    });
-                });
-                ffmpeg.on('close', () => {
-                    if (snapshotBuffer.length > 0) {
-                        resolve(snapshotBuffer);
-                    } else {
-                        reject('Failed to fetch snapshot.');
-                    }
+            this.log.debug('Snapshot command: ' + this.videoProcessor + ' ' + ffmpegArgs, this.cameraName, this.config.debug);
+            const ffmpeg = spawn(this.videoProcessor, ffmpegArgs.split(/\s+/), {env: process.env});
 
-                    const runtime = (Date.now() - startTime) / 1000;
-                    let message = 'Fetching snapshot took ' + runtime + ' seconds.';
-                    if (runtime < 5) {
-                        this.log.debug(message, this.cameraName, this.config.debug);
-                    } else {
-                        if (runtime < 22) {
-                            this.log.warn(message, this.cameraName);
-                        } else {
-                            message += ' The request has timed out and the snapshot has not been refreshed in HomeKit.';
-                            this.log.error(message, this.cameraName);
-                        }
+            let snapshotBuffer = Buffer.alloc(0);
+            ffmpeg.stdout.on('data', (data) => {
+                snapshotBuffer = Buffer.concat([snapshotBuffer, data]);
+            });
+            ffmpeg.on('error', (error: Error) => {
+                throw Error('FFmpeg process creation failed: ' + error.message);
+            });
+            ffmpeg.stderr.on('data', (data) => {
+                data.toString().split('\n').forEach((line: string) => {
+                    if (this.config.debug && line.length > 0) { // For now only write anything out when debug is set
+                        this.log.error(line, this.cameraName + '] [Snapshot');
                     }
                 });
+            });
+            ffmpeg.on('close', () => {
+                if (snapshotBuffer.length > 0) {
+                    resolve(snapshotBuffer);
+                } else {
+                    reject('Failed to fetch snapshot.');
+                }
+
+                const runtime = (Date.now() - startTime) / 1000;
+                let message = 'Fetching snapshot took ' + runtime + ' seconds.';
+                if (runtime < 5) {
+                    this.log.debug(message, this.cameraName, this.config.debug);
+                } else {
+                    if (runtime < 22) {
+                        this.log.warn(message, this.cameraName);
+                    } else {
+                        message += ' The request has timed out and the snapshot has not been refreshed in HomeKit.';
+                        this.log.error(message, this.cameraName);
+                    }
+                }
             });
         });
     }
@@ -212,7 +215,7 @@ export class StreamingDelegate extends EventEmitter {
             this.log.debug('Snapshot requested: ' + request.width + ' x ' + request.height,
                 this.cameraName, this.config.debug);
 
-            const snapshot = await this.fetchSnapshot(resolution.snapFilter);
+            const snapshot = await this.snapshot;
 
             this.log.debug('Sending snapshot: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
                 (resolution.height > 0 ? resolution.height : 'native'), this.cameraName, this.config.debug);

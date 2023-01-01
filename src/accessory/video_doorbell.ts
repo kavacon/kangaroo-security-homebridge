@@ -32,13 +32,13 @@ export class VideoDoorbellService {
         accessory.addService(cameraOperatingMode);
 
         const videoConfig = {deviceId: device.deviceId, homeId: context.homeId}
-        const delegate = new StreamingDelegate(this.log, videoConfig, this.hap, this.client, device.deviceName);
+        const delegate = new StreamingDelegate(this.log, videoConfig, this.hap, this.client, device.deviceName, device.lastAlarm);
         const doorbellOptions = this.getDoorbellControllerOptions(delegate, device.deviceName)
         const doorbellController = new this.hap.DoorbellController(doorbellOptions);
         delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
 
         accessory.configureController(doorbellController);
-        this.configureNotifications(device.deviceId, doorbellController, accessory);
+        this.configureNotifications(device.deviceId, doorbellController, accessory, delegate);
         return {accessory, cleanup: () => { accessory.removeController(doorbellController); delegate.shutdown() }};
     }
     
@@ -47,15 +47,24 @@ export class VideoDoorbellService {
         return this.configure(device, accessory);
     }
 
-    private configureNotifications(deviceId: string, controller: DoorbellController, accessory: PlatformAccessory<KangarooContext>) {
+    private configureNotifications(deviceId: string, controller: DoorbellController, accessory: PlatformAccessory<KangarooContext>, delegate: StreamingDelegate) {
         accessory.getService(this.hap.Service.Doorbell)?.getCharacteristic(this.hap.Characteristic.ProgrammableSwitchEvent).sendEventNotification(true);
         controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
-        this.notificationService.onDoorbell(deviceId, (_) => controller.ringDoorbell());
-        this.notificationService.onMotionDetected(deviceId, this.motionListener(controller));
+
+        this.notificationService.onDoorbell(deviceId, this.doorbellListener(controller, delegate));
+        this.notificationService.onMotionDetected(deviceId, this.motionListener(controller, delegate));
     }
 
-    private motionListener(controller: DoorbellController): (alarm: Alarm) => void {
+    private doorbellListener(controller: DoorbellController, delegate: StreamingDelegate): (alarm: Alarm) => void {
         return (alarm: Alarm) => {
+            delegate.updateAlarm(alarm);
+            controller.ringDoorbell();
+        }
+    }
+
+    private motionListener(controller: DoorbellController, delegate: StreamingDelegate): (alarm: Alarm) => void {
+        return (alarm: Alarm) => {
+            delegate.updateAlarm(alarm);
             controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(true);
             setTimeout(() =>
                 controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(false)
