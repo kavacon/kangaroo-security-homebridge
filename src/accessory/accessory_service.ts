@@ -1,19 +1,21 @@
 import {Device, DeviceType, KangarooContext} from "../model";
 import {VideoDoorbellService} from "./video_doorbell";
 import {Logging, PlatformAccessory, API, HAP, Categories, CharacteristicValue} from "homebridge";
-import {getDevice, updateDevice} from "../client";
+import {Client} from "../client/client";
 
 export class AccessoryService {
     private readonly log: Logging;
     private api: API;
     private readonly hap: HAP;
+    private readonly client: Client
     private readonly videoDoorbellService: VideoDoorbellService;
 
-    constructor(log: Logging, api: API, hap: HAP) {
+    constructor(log: Logging, api: API, hap: HAP, client: Client) {
         this.log = log;
         this.api = api;
         this.hap = hap;
-        this.videoDoorbellService = new VideoDoorbellService(log, hap)
+        this.client = client;
+        this.videoDoorbellService = new VideoDoorbellService(log, hap, client)
     }
 
     fromDevice(device: Device, homeId: string): { accessory: PlatformAccessory<KangarooContext>; cleanup?: () => void } {
@@ -30,7 +32,7 @@ export class AccessoryService {
     }
 
     updateAccessory(accessory: PlatformAccessory<KangarooContext>): Promise<{ accessory: PlatformAccessory<KangarooContext>; cleanup?: () => void }> {
-        const res = getDevice(accessory.context.homeId, accessory.context.deviceId);
+        const res = this.client.getDevice(accessory.context.homeId, accessory.context.deviceId);
         return res.then( device => {
             const service = accessory.getService(this.hap.Service.AccessoryInformation);
             service?.getCharacteristic(this.hap.Characteristic.FirmwareRevision).updateValue(''+device.fwVersion)
@@ -63,10 +65,9 @@ export class AccessoryService {
 
         accessoryInformation.getCharacteristic(this.hap.Characteristic.Name)
             .onSet((value: CharacteristicValue, _) => {
-                return updateDevice(homeId, device.deviceId, { deviceName: ''+value })
+                return this.client.updateDevice(homeId, device.deviceId, { deviceName: ''+value })
                     .then(device => device.deviceName)
             });
-        this.log.warn(`information ${accessoryInformation.UUID}`);
         accessory.context = context;
         return accessory;
     }

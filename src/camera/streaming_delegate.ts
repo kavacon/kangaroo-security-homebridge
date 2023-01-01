@@ -22,7 +22,7 @@ import ffmpegPath from 'ffmpeg-for-homebridge';
 import pickPort, { pickPortOptions } from 'pick-port';
 import { VideoConfig } from './config';
 import { FfmpegProcess } from './ffmpeg';
-import {getDevice} from "../client";
+import {Client} from "../client/client";
 import EventEmitter from "events";
 
 type SessionInfo = {
@@ -68,16 +68,18 @@ export class StreamingDelegate extends EventEmitter {
     private readonly cameraName: string;
     private readonly config: VideoConfig;
     private readonly videoProcessor: string;
+    private readonly client: Client
 
     // keep track of sessions
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
-    constructor(log: Logger, config: VideoConfig, hap: HAP, cameraName: string) {
+    constructor(log: Logger, config: VideoConfig, hap: HAP, client: Client, cameraName: string) {
         super();
         this.log = log;
         this.hap = hap;
         this.config = config;
+        this.client = client;
 
         this.cameraName = cameraName;
         this.videoProcessor = ffmpegPath || 'ffmpeg';
@@ -127,7 +129,7 @@ export class StreamingDelegate extends EventEmitter {
     }
 
     fetchSnapshot(snapFilter?: string): Promise<Buffer> {
-        return getDevice(this.config.homeId, this.config.deviceId).
+        return this.client.getDevice(this.config.homeId, this.config.deviceId).
         then((device) => {
             return new Promise( (resolve, reject) => {
                 const startTime = Date.now();
@@ -413,8 +415,8 @@ export class StreamingDelegate extends EventEmitter {
     }
 
     private async photoStitchInputString(): Promise<{inputString: string, frameCount: number }> {
-        const device = await getDevice(this.config.homeId, this.config.deviceId);
-        const inputString = '-i ' + device.lastAlarm.images.join(' -i ');
+        const device = await this.client.getDevice(this.config.homeId, this.config.deviceId);
+        const inputString = device.lastAlarm.images.join(' -i ');
         return { inputString, frameCount: device.lastAlarm.images.length };
     }
 }

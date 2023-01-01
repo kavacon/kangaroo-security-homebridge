@@ -11,17 +11,17 @@
         "required": true,
         "default": "KangarooSecurity"
       },
-      "phone": {
-        "title": "phone number registered with kangaroo",
+      "refreshToken": {
+        "title": "the refresh token used by your kangaroo account for oauth",
         "type": "string",
         "required": true,
-        "default": "+61400000000"
+        "default": "xxxxxxxxxx"
       },
-      "security_code": {
-        "title": "security code sent to phone number",
+      "secureTokenKey": {
+        "title": "the key to make secure token requests",
         "type": "string",
         "required": true,
-        "default": "xxxxxx"
+        "default": "xxxxxxxxxx"
       }
     }
   }

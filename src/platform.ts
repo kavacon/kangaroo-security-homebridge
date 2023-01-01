@@ -1,7 +1,8 @@
 import {API, APIEvent, DynamicPlatformPlugin, HAP, Logging, PlatformAccessory, PlatformConfig} from 'homebridge';
 import {KangarooContext} from "./model";
 import {AccessoryService} from "./accessory/accessory_service";
-import {account, setLog} from "./client";
+import {Client} from "./client/client";
+import {AuthManager} from "./client/auth_manager";
 
 const PLUGIN_NAME = 'kangaroo-security-homebridge';
 const PLATFORM_NAME = 'KangarooSecurity';
@@ -19,6 +20,7 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     private readonly log: Logging;
     private readonly api: API;
     private readonly accessoryService: AccessoryService;
+    private readonly client: Client;
     private deleteQueue: PlatformAccessory<KangarooContext>[] = [];
     private cachedAccessories: PlatformAccessory<KangarooContext>[] = [];
     private accessories: PlatformAccessory<KangarooContext>[] = [];
@@ -27,8 +29,11 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     constructor(log: Logging, config: PlatformConfig, api: API) {
         this.log = log;
         this.api = api;
-        this.accessoryService = new AccessoryService(log, api, hap);
-        setLog(log);
+
+        const authManager = new AuthManager(log, config.refreshToken, config.secureTokenKey);
+        this.client = new Client(log, authManager);
+        this.accessoryService = new AccessoryService(log, api, hap, this.client);
+
         this.log.info('Kangaroo Security bridge starting up');
         // Only occurs once all existing accessories have been loaded
         this.api.on(APIEvent.DID_FINISH_LAUNCHING, () => this.apiDidFinishLaunching());
@@ -57,7 +62,7 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
         // get auth token
         // store somewhere
         // retrieve home details using client
-        const res = account();
+        const res = this.client.account();
         res.then( res => {
             res.homes.forEach(
                 home => {

@@ -9,16 +9,18 @@ import {
     Service
 } from "homebridge";
 import { Device, KangarooContext } from "../model";
-import {getDevice, updateDeviceCam} from "../client";
+import {Client} from "../client/client";
 import {StreamingDelegate} from "../camera/streaming_delegate"
 
 export class VideoDoorbellService {
     private readonly log: Logging;
     private readonly hap: HAP;
+    private readonly client: Client;
 
-    constructor(log: Logging, hap: HAP) {
+    constructor(log: Logging, hap: HAP, client: Client) {
         this.log = log;
         this.hap = hap;
+        this.client = client;
     }
     
     configure(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
@@ -27,7 +29,7 @@ export class VideoDoorbellService {
         accessory.addService(cameraOperatingMode);
 
         const videoConfig = {deviceId: device.deviceId, homeId: context.homeId}
-        const delegate = new StreamingDelegate(this.log, videoConfig, this.hap, device.deviceName);
+        const delegate = new StreamingDelegate(this.log, videoConfig, this.hap, this.client, device.deviceName);
         const doorbellOptions = this.getDoorbellControllerOptions(delegate, device.deviceName)
         const doorbellController = new this.hap.DoorbellController(doorbellOptions);
         delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
@@ -78,7 +80,7 @@ export class VideoDoorbellService {
         const cameraService = new this.hap.Service.CameraOperatingMode();
         cameraService
             .getCharacteristic(this.hap.Characteristic.EventSnapshotsActive)
-            .onSet(this.setWith(context, VideoDoorbellService.handleEventSnapshotsActiveSet))
+            .onSet(this.setWith(context, this.handleEventSnapshotsActiveSet.bind(this)))
             .updateValue(this.hap.Characteristic.EventSnapshotsActive.ENABLE);
         cameraService
             .getCharacteristic(this.hap.Characteristic.HomeKitCameraActive)
@@ -86,8 +88,8 @@ export class VideoDoorbellService {
             .updateValue(device.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF)
         cameraService
             .getCharacteristic(this.hap.Characteristic.NightVision)
-            .onGet(this.getWith(context, VideoDoorbellService.handleHomeKitNightVisionGet))
-            .onSet(this.setWith(context, VideoDoorbellService.handleHomeKitNightVisionSet));
+            .onGet(this.getWith(context, this.handleHomeKitNightVisionGet.bind(this)))
+            .onSet(this.setWith(context, this.handleHomeKitNightVisionSet.bind(this)));
         cameraService.isPrimaryService = true;
         return cameraService;
     }
@@ -103,7 +105,7 @@ export class VideoDoorbellService {
         };
     }
 
-    private setWith(context: KangarooContext, setter: (value: CharacteristicValue, context: KangarooContext) => Promise<Nullable<CharacteristicValue>>): CharacteristicSetHandler {
+    private setWith(context: KangarooContext, setter: (value: CharacteristicValue, context: KangarooContext) => Promise<Nullable<CharacteristicValue> | void>): CharacteristicSetHandler {
         return (value) => {
             this.log.info('setting characteristic for %s', context.deviceId)
             return setter(value, context)
@@ -114,26 +116,24 @@ export class VideoDoorbellService {
         };
     }
 
-    private static handleEventSnapshotsActiveSet(value: CharacteristicValue, context: KangarooContext): Promise<CharacteristicValue> {
-        return Promise.resolve(value);
+    private handleEventSnapshotsActiveSet(value: CharacteristicValue, context: KangarooContext): Promise<void> {
+        this.log.info(`request set event snapshots active for device ${context.deviceId}`);
+        return Promise.resolve();
     }
 
     private handleHomeKitCameraActiveGet(context: KangarooContext): Promise<CharacteristicValue> {
-        return getDevice(context.homeId, context.deviceId)
+        return this.client.getDevice(context.homeId, context.deviceId)
             .then(d => d.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF);
     }
 
-    private static handleHomeKitNightVisionGet(context: KangarooContext): Promise<CharacteristicValue> {
-        return getDevice(context.homeId, context.deviceId)
+    private handleHomeKitNightVisionGet(context: KangarooContext): Promise<CharacteristicValue> {
+        return this.client.getDevice(context.homeId, context.deviceId)
             .then(d => d.irLed);
     }
 
-    private static handleHomeKitNightVisionSet(value: CharacteristicValue, context: KangarooContext): Promise<CharacteristicValue> {
-        if (value) {
-            return updateDeviceCam(context.homeId, context.deviceId, {irLed: true})
-                .then(_ => true)
-        }
-        return updateDeviceCam(context.homeId, context.deviceId, {irLed: false})
-            .then(_ => false);
+    private async handleHomeKitNightVisionSet(value: CharacteristicValue, context: KangarooContext): Promise<void> {
+        const res = await this.client.updateDeviceCam(context.homeId, context.deviceId, {irLed: !!value});
+        this.log.info(`run set night vision for device ${context.deviceId} requested ${!!value} set ${res.irLed}`);
+        return Promise.resolve()
     }
 }
