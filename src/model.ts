@@ -8,7 +8,7 @@ enum Country {
     AU = "AU",
 }
 
-export const DOORBELL_ALARM = 108;
+export const DOORBELL_ALARM = 801;
 export const MOTION_ALARM = 101;
 type BatteryStatus = 'ok';
 export type AlarmType = typeof DOORBELL_ALARM | typeof MOTION_ALARM | 3 | 1;

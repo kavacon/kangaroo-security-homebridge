@@ -2,25 +2,28 @@ import {
     CameraControllerOptions, CameraStreamingDelegate,
     CharacteristicGetHandler,
     CharacteristicSetHandler,
-    CharacteristicValue, DoorbellOptions,
+    CharacteristicValue, DoorbellController, DoorbellOptions,
     HAP,
     Logging, Nullable,
     PlatformAccessory,
     Service
 } from "homebridge";
-import { Device, KangarooContext } from "../model";
+import {Alarm, Device, KangarooContext} from "../model";
 import {Client} from "../client/client";
 import {StreamingDelegate} from "../camera/streaming_delegate"
+import {NotificationService} from "../notification/notification_service";
 
 export class VideoDoorbellService {
     private readonly log: Logging;
     private readonly hap: HAP;
     private readonly client: Client;
+    private readonly notificationService: NotificationService;
 
-    constructor(log: Logging, hap: HAP, client: Client) {
+    constructor(log: Logging, hap: HAP, client: Client, notificationService: NotificationService) {
         this.log = log;
         this.hap = hap;
         this.client = client;
+        this.notificationService = notificationService;
     }
     
     configure(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
@@ -35,12 +38,29 @@ export class VideoDoorbellService {
         delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
 
         accessory.configureController(doorbellController);
+        this.configureNotifications(device.deviceId, doorbellController, accessory);
         return {accessory, cleanup: () => { accessory.removeController(doorbellController); delegate.shutdown() }};
     }
     
     update(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
         accessory.removeService(accessory.getService(this.hap.Service.CameraOperatingMode)!);
         return this.configure(device, accessory);
+    }
+
+    private configureNotifications(deviceId: string, controller: DoorbellController, accessory: PlatformAccessory<KangarooContext>) {
+        accessory.getService(this.hap.Service.Doorbell)?.getCharacteristic(this.hap.Characteristic.ProgrammableSwitchEvent).sendEventNotification(true);
+        controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
+        this.notificationService.onDoorbell(deviceId, (_) => controller.ringDoorbell());
+        this.notificationService.onMotionDetected(deviceId, this.motionListener(controller));
+    }
+
+    private motionListener(controller: DoorbellController): (alarm: Alarm) => void {
+        return (alarm: Alarm) => {
+            controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(true);
+            setTimeout(() =>
+                controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(false)
+                , 10000);
+        }
     }
 
     private getDoorbellControllerOptions(delegate: CameraStreamingDelegate, name: string): DoorbellOptions & CameraControllerOptions {

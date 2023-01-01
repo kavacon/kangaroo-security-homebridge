@@ -3,6 +3,7 @@ import {KangarooContext} from "./model";
 import {AccessoryService} from "./accessory/accessory_service";
 import {Client} from "./client/client";
 import {AuthManager} from "./client/auth_manager";
+import {NotificationService} from "./notification/notification_service";
 
 const PLUGIN_NAME = 'kangaroo-security-homebridge';
 const PLATFORM_NAME = 'KangarooSecurity';
@@ -20,11 +21,11 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     private readonly log: Logging;
     private readonly api: API;
     private readonly accessoryService: AccessoryService;
+    private readonly notificationService: NotificationService;
     private readonly client: Client;
     private deleteQueue: PlatformAccessory<KangarooContext>[] = [];
     private cachedAccessories: PlatformAccessory<KangarooContext>[] = [];
     private accessories: PlatformAccessory<KangarooContext>[] = [];
-    private shutdownActions: (() => void)[] = []
     
     constructor(log: Logging, config: PlatformConfig, api: API) {
         this.log = log;
@@ -32,7 +33,8 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
 
         const authManager = new AuthManager(log, config.refreshToken, config.secureTokenKey);
         this.client = new Client(log, authManager);
-        this.accessoryService = new AccessoryService(log, api, hap, this.client);
+        this.notificationService = new NotificationService(log, this.client, )
+        this.accessoryService = new AccessoryService(log, api, hap, this.client, this.notificationService);
 
         this.log.info('Kangaroo Security bridge starting up');
         // Only occurs once all existing accessories have been loaded
@@ -43,9 +45,8 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     configureAccessory(accessory: PlatformAccessory<KangarooContext>): void {
         this.log.info('loading saved accessory: [%s]', accessory.displayName);
         this.accessoryService.updateAccessory(accessory)
-            .then(({ accessory, cleanup }) => {
+            .then(accessory => {
                 this.cachedAccessories.push(accessory);
-                cleanup && this.shutdownActions.push(cleanup);
             })
             .catch( reason => {
                 this.log.error('Accessory %s update failed with reason: %s, scheduling for removal', accessory.displayName, reason);
@@ -70,9 +71,8 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
                     home.devices
                         .filter( ({ deviceId }) => !this.cachedAccessories.some( ({ context }) => context.deviceId === deviceId))
                         .forEach( device => {
-                            const { accessory, cleanup } = this.accessoryService.fromDevice(device, home.homeId);
+                            const accessory = this.accessoryService.fromDevice(device, home.homeId);
                             this.accessories.push(accessory);
-                            cleanup && this.shutdownActions.push(cleanup);
                         })
                 }
             )
@@ -86,6 +86,7 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     }
 
     private shutdown() {
-        this.shutdownActions.forEach(a => a());
+        this.notificationService.onShutdown();
+        this.accessoryService.onShutdown();
     }
 }

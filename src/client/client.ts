@@ -4,7 +4,6 @@ import {Logging} from "homebridge";
 import {AuthManager} from "./auth_manager";
 
 const BASE_URL = 'https://api.heykangaroo.com/v1/me'
-let log: Logging;
 
 export class Client {
     private readonly log: Logging;
