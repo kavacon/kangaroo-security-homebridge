@@ -31,8 +31,11 @@
   "homepage": "https://github.com/kavacon/kangaroo-security-homebridge#readme",
   "dependencies": {
     "ffmpeg-for-homebridge": "^0.1.4",
+    "ffprobe-static": "^3.1.0",
     "node-fetch": "^2.6.6",
-    "pick-port": "^1.0.1"
+    "pick-port": "^1.0.1",
+    "temp": "^0.9.4",
+    "videoshow": "^0.1.12"
   },
   "devDependencies": {
     "@types/node": "^14.18.11",

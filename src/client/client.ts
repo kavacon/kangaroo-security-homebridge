@@ -37,7 +37,7 @@ export class Client {
     account(): Promise<Account> {
         return this.send<Account>(BASE_URL, 'GET')
             .then(result => {
-                this.log.debug(JSON.stringify(result, null, 4));
+                this.log.debug('account call completed');
                 return result
             })
     }

@@ -61,7 +61,7 @@ export class FfmpegProcess {
                 callback();
                 callback = undefined;
             }
-            if (debug && line.match(/\[(panic|fatal|error)\]/)) { // For now only write anything out when debug is set
+            if (line.match(/\[(panic|fatal|error)\]/)) { // For now only write anything out when debug is set
                 log.error(line, cameraName);
             } else if (debug) {
                 log.debug(line, cameraName, true);
