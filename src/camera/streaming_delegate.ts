@@ -43,12 +43,6 @@ type SessionInfo = {
     videoCryptoSuite: SRTPCryptoSuites; // should be saved if multiple suites are supported
     videoSRTP: Buffer; // key and salt concatenated
     videoSSRC: number; // rtp synchronisation source
-
-    audioPort: number;
-    audioReturnPort: number;
-    audioCryptoSuite: SRTPCryptoSuites;
-    audioSRTP: Buffer;
-    audioSSRC: number;
 };
 
 type ResolutionInfo = {
@@ -302,8 +296,6 @@ export class StreamingDelegate extends EventEmitter {
         };
         const videoReturnPort = await pickPort(options);
         const videoSSRC = this.hap.CameraController.generateSynchronisationSource();
-        const audioReturnPort = await pickPort(options);
-        const audioSSRC = this.hap.CameraController.generateSynchronisationSource();
 
         const sessionInfo: SessionInfo = {
             address: request.targetAddress,
@@ -314,12 +306,6 @@ export class StreamingDelegate extends EventEmitter {
             videoCryptoSuite: request.video.srtpCryptoSuite,
             videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
             videoSSRC: videoSSRC,
-
-            audioPort: request.audio.port,
-            audioReturnPort: audioReturnPort,
-            audioCryptoSuite: request.audio.srtpCryptoSuite,
-            audioSRTP: Buffer.concat([request.audio.srtp_key, request.audio.srtp_salt]),
-            audioSSRC: audioSSRC
         };
 
         const response: PrepareStreamResponse = {
@@ -330,13 +316,6 @@ export class StreamingDelegate extends EventEmitter {
                 srtp_key: request.video.srtp_key,
                 srtp_salt: request.video.srtp_salt
             },
-            audio: {
-                port: audioReturnPort,
-                ssrc: audioSSRC,
-
-                srtp_key: request.audio.srtp_key,
-                srtp_salt: request.audio.srtp_salt
-            }
         };
 
         this.pendingSessions.set(request.sessionID, sessionInfo);
@@ -348,10 +327,6 @@ export class StreamingDelegate extends EventEmitter {
         if (sessionInfo) {
             const vcodec = this.config.vcodec || 'libx264';
             const mtu = this.config.packetSize || 1316; // request.video.mtu is not used
-            let encoderOptions = this.config.encoderOptions;
-            if (!encoderOptions && vcodec === 'libx264') {
-                encoderOptions = '-preset ultrafast -tune zerolatency';
-            }
 
             const resolution = this.determineResolution(request.video, false);
 
@@ -376,31 +351,33 @@ export class StreamingDelegate extends EventEmitter {
                 (resolution.height > 0 ? resolution.height : 'native') + ', ' + (fps > 0 ? fps : 'native') +
                 ' fps, ' + (videoBitrate > 0 ? videoBitrate : '???') + ' kbps', this.cameraName);
 
-            const photoStitch = await this.streamStitch;
+            const input = await this.streamStitch;
+            const output = `srtp://${sessionInfo.address}:${sessionInfo.videoPort}?rtcpport=${sessionInfo.videoPort}'&pkt_size=${mtu}`
+            const inputOptions = [
+                '-stream_loop -1' ,
+                '-an',
+                '-sn',
+                '-dn',
+            ]
+            const outputOptions = [
+                `-codec:v ${vcodec}` ,
+                '-pix_fmt yuv420p' ,
+                '-color_range mpeg' ,
+                `-r ${fps}`,
+                '-preset ultrafast',
+                '-tune zerolatency',
+                `-filter:v ${resolution.videoFilter}` ,
+                `-b:v ${videoBitrate}k`,
+                `-payload_type ${request.video.pt}`,
 
-            const ffmpegArgs = // Video
-                '-stream_loop 6' +
-                ` -i ${photoStitch}` +
-                (this.config.mapvideo ? ' -map ' + this.config.mapvideo : ' -an -sn -dn') +
-                ' -codec:v ' + vcodec +
-                ' -pix_fmt yuv420p' +
-                ' -color_range mpeg' +
-                (fps > 0 ? ' -r ' + fps : '') +
-                (encoderOptions ? ' ' + encoderOptions : '') +
-                (resolution.videoFilter ? ' -filter:v ' + resolution.videoFilter : '') +
-                (videoBitrate > 0 ? ' -b:v ' + videoBitrate + 'k' : '') +
-                ' -payload_type ' + request.video.pt
-
-            + // Video Stream
-                ' -ssrc ' + sessionInfo.videoSSRC +
-                ' -f rtp' +
-                ' -srtp_out_suite AES_CM_128_HMAC_SHA1_80' +
-                ' -srtp_out_params ' + sessionInfo.videoSRTP.toString('base64') +
-                ' srtp://' + sessionInfo.address + ':' + sessionInfo.videoPort +
-                '?rtcpport=' + sessionInfo.videoPort + '&pkt_size=' + mtu
-
-            + ' -loglevel level' + (this.config.debug ? '+verbose' : '') +
-                ' -progress pipe:1';
+                // Video Stream
+                `-ssrc ${sessionInfo.videoSSRC}` ,
+                '-f rtp' ,
+                '-srtp_out_suite AES_CM_128_HMAC_SHA1_80' ,
+                `-srtp_out_params ${sessionInfo.videoSRTP.toString('base64')}` ,
+                `-loglevel level${this.config.debug ? '+verbose' : ''}` ,
+                '-progress pipe:1'
+            ]
 
             const activeSession: ActiveSession = {};
 
@@ -421,8 +398,8 @@ export class StreamingDelegate extends EventEmitter {
             });
             activeSession.socket.bind(sessionInfo.videoReturnPort);
 
-            activeSession.mainProcess = new FfmpegProcess(this.cameraName, request.sessionID, this.videoProcessor,
-                ffmpegArgs, this.log, this.config.debug, this.stopStream.bind(this), (sessionID) => this.emit('stream_error', sessionID), callback);
+            activeSession.mainProcess = new FfmpegProcess(this.cameraName, request.sessionID, {input, output, inputOptions, outputOptions},
+                 this.log, this.config.debug, this.stopStream.bind(this), (sessionID) => this.emit('stream_error', sessionID), callback);
 
             this.ongoingSessions.set(request.sessionID, activeSession);
             this.pendingSessions.delete(request.sessionID);
