@@ -3,9 +3,10 @@ import {Logger} from 'homebridge';
 import ffmpeg from "fluent-ffmpeg";
 import {Readable} from "stream";
 import WritableStream = NodeJS.WritableStream;
+import {Buffer} from "buffer";
 
 export interface FfmpegProcessOptions {
-    input: string | Buffer,
+    input: string | Buffer | string[],
     output: string | WritableStream,
     inputOptions: string[],
     outputOptions: string[],
@@ -18,21 +19,16 @@ export class FfmpegProcess<T> {
     private killTimeout?: NodeJS.Timeout;
 
     constructor(cameraName: string, options: FfmpegProcessOptions, log: Logger, onError: CallableFunction, onFailure: CallableFunction, onEnd?: CallableFunction, callback?: FfmpegCallback<T>) {
-        log.debug('command: %s %s %s %s', typeof options.input == "string" && options.input,
+        log.debug('command: %s %s %s %s', !(options.input instanceof Buffer) && options.input,
             options.inputOptions.join(' '), options.outputOptions?.join(' ') || '',
             typeof options.output == "string" && options.output,
             cameraName
         );
 
-        const commandOptions = {
-            source: typeof options.input == "string" ? options.input :  Readable.from(options.input),
-            logger: log,
-        }
-
         let started = false;
         const startTime = Date.now();
 
-        this.command = ffmpeg(commandOptions)
+        this.command = this.startCommand(options.input, log)
             .inputOptions(options.inputOptions)
             .output(options.output)
             .outputOptions(options.outputOptions)
@@ -87,6 +83,18 @@ export class FfmpegProcess<T> {
         this.killTimeout = setTimeout(() => {
             this.command.kill();
         }, 2 * 1000);
+    }
+
+    private startCommand(input: string | string[] | Buffer, logger: Logger) {
+        const cmd = ffmpeg({logger});
+        if (input instanceof Array<string>){
+            input.forEach(i => cmd.input(i));
+        } else if (input instanceof Buffer){
+            cmd.input(Readable.from(input));
+        } else {
+            cmd.input(input);
+        }
+        return cmd;
     }
 
     private handleKillSignal(log: Logger, cameraName: string, onError: CallableFunction, onFailure: CallableFunction, callback?: FfmpegCallback<T>) {

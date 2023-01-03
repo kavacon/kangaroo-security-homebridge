@@ -30,6 +30,7 @@ import * as https from "https";
 import videoshow from "videoshow";
 import {Buffer} from "buffer";
 import {Writable} from "stream";
+import WritableStream = NodeJS.WritableStream;
 
 process.env.FFMPEG_PATH = ffmpegPath;
 process.env.FFPROBE_PATH = ffProbePath.path;
@@ -60,6 +61,23 @@ type ActiveSession = {
     timeout?: NodeJS.Timeout;
     socket?: Socket;
 };
+
+interface BufferStream {
+    buffer: () => Buffer;
+    stream: WritableStream;
+}
+
+function bufferStream(): BufferStream {
+    let buffer = Buffer.alloc(0);
+    return {
+        buffer: () => buffer,
+        stream: new Writable({
+            write(chunk: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void) {
+                buffer = Buffer.concat([buffer, chunk]);
+            }
+        })
+    };
+}
 
 export declare interface StreamingDelegate extends CameraStreamingDelegate {
     on(event: 'stream_error', listener: (sessionID: string) => void): this;
@@ -150,17 +168,12 @@ export class StreamingDelegate extends EventEmitter {
             const startTime = Date.now();
             const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel error']
             this.log.debug('Creating snapshot process');
-            let snapshotBuffer = Buffer.alloc(0);
-            const output = new Writable({
-                write(chunk: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void) {
-                    snapshotBuffer = Buffer.concat([snapshotBuffer, chunk]);
-                }
-            })
-            const options = {input: imageUrl, outputOptions, output, inputOptions: []}
+            const output = bufferStream();
+            const options = {input: imageUrl, outputOptions, output: output.stream, inputOptions: []}
             const onError = () => {reject('FFmpeg process creation failed for snapshot'); ffmpeg.stop();}
             const onEnd = () => {
-                if (snapshotBuffer.length > 0) {
-                    resolve(snapshotBuffer);
+                if (output.buffer().length > 0) {
+                    resolve(output.buffer());
                 } else {
                     reject('Failed to fetch snapshot.');
                 }
@@ -237,15 +250,10 @@ export class StreamingDelegate extends EventEmitter {
             resizeFilter && outputOptions.push(`-filter:v ${resizeFilter}`)
 
             this.log.debug('Creating resize process');
-            let resizeBuffer = Buffer.alloc(0);
-            const output = new Writable({
-                write(chunk: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void) {
-                    resizeBuffer = Buffer.concat([resizeBuffer, chunk]);
-                }
-            })
-            const options = {input, outputOptions, output, inputOptions: []}
+            const output = bufferStream();
+            const options = {input, outputOptions, output: output.stream, inputOptions: []}
             const onError = () => {reject('FFmpeg process creation failed for resize'); ffmpeg.stop();}
-            const onEnd = () => resolve(resizeBuffer);
+            const onEnd = () => resolve(output.buffer());
             const ffmpeg = new FfmpegProcess(this.cameraName, options, this.log, onError, onError, onEnd);
         });
     }
