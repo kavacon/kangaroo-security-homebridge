@@ -36,10 +36,6 @@ export class Client {
 
     account(): Promise<Account> {
         return this.send<Account>(BASE_URL, 'GET')
-            .then(result => {
-                this.log.debug('account call completed');
-                return result
-            })
     }
 
     private send<T>(url: string, method: string, body?: any): Promise<T> {
@@ -53,6 +49,9 @@ export class Client {
                     },
                     body: JSON.stringify(body)
                 })
-            ).then(result => result.json());
+            ).then(result => {
+                this.log.info(`Completed ${method} ${url}`);
+                return result.json();
+            });
     }
 }

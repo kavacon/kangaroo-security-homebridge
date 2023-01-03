@@ -4,7 +4,7 @@ import {Logging} from "homebridge";
 import Timeout = NodeJS.Timeout;
 import EventEmitter from "events";
 
-const POLLING_DURATION_MILLISECONDS = 30000;
+const POLLING_DURATION_MILLISECONDS = 20000;
 
 export declare interface NotificationService {
     on<T extends string>(event: `doorbell_ring_${T}`, listener: (alarm: Alarm) => void): this;
@@ -18,6 +18,7 @@ export class NotificationService extends EventEmitter {
     private readonly log: Logging;
     private readonly client: Client;
     private readonly interval: Timeout;
+    private readonly lastAlarmByDevice: Map<string, string> = new Map();
 
     constructor(log: Logging, client: Client) {
         super();
@@ -48,11 +49,14 @@ export class NotificationService extends EventEmitter {
     }
 
     private notify(alarm: Alarm) {
-        const currentTime = Date.now();
-        const ttl = Date.parse(alarm.createTime) + POLLING_DURATION_MILLISECONDS;
-        if (currentTime >= ttl) {
+        if (!this.lastAlarmByDevice.get(alarm.deviceId)) {
+            this.lastAlarmByDevice.set(alarm.deviceId, alarm.alarmId);
+        }
+        if (this.lastAlarmByDevice.get(alarm.deviceId) === alarm.alarmId) {
+            //ignore alarm already known
             return;
         }
+        this.lastAlarmByDevice.set(alarm.deviceId, alarm.alarmId);
         switch (alarm.alarmType) {
             case DOORBELL_ALARM:
                 this.log.debug(`emitting notification for doorbell ring for device ${alarm.deviceId}`);
