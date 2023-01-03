@@ -1,26 +1,31 @@
 // adapted from https://github.com/Sunoo/homebridge-camera-ffmpeg/blob/master/src/ffmpeg.ts
-import {Logger, StreamRequestCallback} from 'homebridge';
+import {Logger} from 'homebridge';
 import ffmpeg from "fluent-ffmpeg";
-
-export type StreamAction = (sessionId: string) => void;
+import {Readable} from "stream";
+import WritableStream = NodeJS.WritableStream;
 
 export interface FfmpegProcessOptions {
-    input: string,
-    output: string,
+    input: string | Buffer,
+    output: string | WritableStream,
     inputOptions: string[],
     outputOptions: string[],
 }
 
-export class FfmpegProcess {
+export type FfmpegCallback<T> = (arg?: Error | T) => void;
+
+export class FfmpegProcess<T> {
     private readonly command;
     private killTimeout?: NodeJS.Timeout;
 
-    constructor(cameraName: string, sessionId: string, options: FfmpegProcessOptions, log: Logger,
-                debug = false, onError: StreamAction, onForceStop: StreamAction, callback?: StreamRequestCallback) {
-        log.debug('Stream command: %s %s %s %s', options.input, options.inputOptions.join(' '), options.outputOptions.join(' '), options.output, cameraName, debug);
+    constructor(cameraName: string, options: FfmpegProcessOptions, log: Logger, onError: CallableFunction, onFailure: CallableFunction, onEnd?: CallableFunction, callback?: FfmpegCallback<T>) {
+        log.debug('command: %s %s %s %s', typeof options.input == "string" && options.input,
+            options.inputOptions.join(' '), options.outputOptions?.join(' ') || '',
+            typeof options.output == "string" && options.output,
+            cameraName
+        );
 
         const commandOptions = {
-            source: options.input,
+            source: typeof options.input == "string" ? options.input :  Readable.from(options.input),
             logger: log,
         }
 
@@ -38,7 +43,7 @@ export class FfmpegProcess {
                         const runtime = (Date.now() - startTime) / 1000;
                         const message = 'Getting the first frames took ' + runtime + ' seconds.';
                         if (runtime < 5) {
-                            log.debug(message, cameraName, debug);
+                            log.debug(message, cameraName);
                         } else if (runtime < 22) {
                             log.warn(message, cameraName);
                         } else {
@@ -49,13 +54,13 @@ export class FfmpegProcess {
             })
             .on('error', (error: Error) => {
                 if (error.message.includes('SIGKILL')) {
-                    this.handleKillSignal(log, cameraName, sessionId, onError, onForceStop, callback);
+                    this.handleKillSignal(log, cameraName, onError, onFailure, callback);
                 } else {
                     log.error('FFmpeg process creation failed: ' + error.message, cameraName);
                     if (callback) {
                         callback(new Error('FFmpeg process creation failed'));
                     }
-                    onError(sessionId);
+                    onError();
                 }
             })
         .on('stderr', (line: string) => {
@@ -65,12 +70,15 @@ export class FfmpegProcess {
             }
             if (line.match(/\[(panic|fatal|error)\]/)) { // For now only write anything out when debug is set
                 log.error(line, cameraName);
-            } else if (debug) {
-                log.debug(line, cameraName, true);
+            } else {
+                log.debug(line, cameraName);
             }
         })
         .on('end', () => {
-            log.error('Process ended without kill signal, session: %s (Error) %s', sessionId, cameraName);
+            if (onEnd) {
+                return onEnd();
+            }
+            log.error('Process ended without kill signal, (Error) %s', cameraName);
         });
         this.command.run();
     }
@@ -81,7 +89,7 @@ export class FfmpegProcess {
         }, 2 * 1000);
     }
 
-    private handleKillSignal(log: Logger, cameraName: string, sessionId: string, onError: StreamAction, onForceStop: StreamAction, callback?: StreamRequestCallback) {
+    private handleKillSignal(log: Logger, cameraName: string, onError: CallableFunction, onFailure: CallableFunction, callback?: FfmpegCallback<T>) {
         return () => {
             if (this.killTimeout) {
                 clearTimeout(this.killTimeout);
@@ -93,11 +101,11 @@ export class FfmpegProcess {
                 log.debug(message + ' (Expected)', cameraName);
             } else {
                 log.error(message + ' (Error)', cameraName);
-                onError(sessionId);
+                onError();
                 if (callback) {
                     callback(new Error(message));
                 } else {
-                    onForceStop(sessionId);
+                    onFailure();
                 }
             }
         }

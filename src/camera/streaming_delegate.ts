@@ -16,7 +16,6 @@ import {
     StreamRequestTypes,
     VideoInfo
 } from 'homebridge';
-import { spawn } from 'child_process';
 import { createSocket, Socket } from 'dgram';
 import ffmpegPath from 'ffmpeg-for-homebridge';
 import ffProbePath from 'ffprobe-static';
@@ -29,6 +28,8 @@ import * as temp from "temp";
 import * as fs from "fs";
 import * as https from "https";
 import videoshow from "videoshow";
+import {Buffer} from "buffer";
+import {Writable} from "stream";
 
 process.env.FFMPEG_PATH = ffmpegPath;
 process.env.FFPROBE_PATH = ffProbePath.path;
@@ -54,8 +55,8 @@ type ResolutionInfo = {
 };
 
 type ActiveSession = {
-    mainProcess?: FfmpegProcess;
-    returnProcess?: FfmpegProcess;
+    mainProcess?: FfmpegProcess<void>;
+    returnProcess?: FfmpegProcess<void>;
     timeout?: NodeJS.Timeout;
     socket?: Socket;
 };
@@ -147,30 +148,17 @@ export class StreamingDelegate extends EventEmitter {
     fetchSnapshot(imageUrl: string): Promise<Buffer> {
         return new Promise( (resolve, reject) => {
             const startTime = Date.now();
-            const ffmpegArgs = `-i ${imageUrl}` + // Still
-                ' -frames:v 1' +
-                ' -f image2 -' +
-                ' -hide_banner' +
-                ' -loglevel error';
-
-            this.log.debug('Snapshot command: ' + this.videoProcessor + ' ' + ffmpegArgs, this.cameraName, this.config.debug);
-            const ffmpeg = spawn(this.videoProcessor, ffmpegArgs.split(/\s+/), {env: process.env});
-
+            const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel error']
+            this.log.debug('Creating snapshot process');
             let snapshotBuffer = Buffer.alloc(0);
-            ffmpeg.stdout.on('data', (data) => {
-                snapshotBuffer = Buffer.concat([snapshotBuffer, data]);
-            });
-            ffmpeg.on('error', (error: Error) => {
-                throw Error('FFmpeg process creation failed: ' + error.message);
-            });
-            ffmpeg.stderr.on('data', (data) => {
-                data.toString().split('\n').forEach((line: string) => {
-                    if (this.config.debug && line.length > 0) { // For now only write anything out when debug is set
-                        this.log.error(line, this.cameraName + '] [Snapshot');
-                    }
-                });
-            });
-            ffmpeg.on('close', () => {
+            const output = new Writable({
+                write(chunk: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void) {
+                    snapshotBuffer = Buffer.concat([snapshotBuffer, chunk]);
+                }
+            })
+            const options = {input: imageUrl, outputOptions, output, inputOptions: []}
+            const onError = () => {reject('FFmpeg process creation failed for snapshot'); ffmpeg.stop();}
+            const onEnd = () => {
                 if (snapshotBuffer.length > 0) {
                     resolve(snapshotBuffer);
                 } else {
@@ -189,7 +177,8 @@ export class StreamingDelegate extends EventEmitter {
                         this.log.error(message, this.cameraName);
                     }
                 }
-            });
+            };
+            const ffmpeg = new FfmpegProcess(this.cameraName, options, this.log, onError, onError, onEnd);
         });
     }
 
@@ -200,7 +189,7 @@ export class StreamingDelegate extends EventEmitter {
                 const startTime = Date.now();
                 const videoOptions = {
                     fps: 25,
-                    loop: 2, // seconds
+                    loop: 1, // seconds
                     transition: false,
                     videoBitrate: 1024,
                     videoCodec: 'libx264',
@@ -244,25 +233,20 @@ export class StreamingDelegate extends EventEmitter {
 
     resize(input: Buffer, resizeFilter?: string): Promise<Buffer> {
         return new Promise<Buffer>((resolve, reject) => {
-            const ffmpegArgs = '-i pipe:' + // Resize
-                ' -frames:v 1' +
-                (resizeFilter ? ' -filter:v ' + resizeFilter : '') +
-                ' -f image2 -';
+            const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel warning'];
+            resizeFilter && outputOptions.push(`-filter:v ${resizeFilter}`)
 
-            this.log.debug('Resize command: ' + this.videoProcessor + ' ' + ffmpegArgs, this.cameraName, this.config.debug);
-            const ffmpeg = spawn(this.videoProcessor, ffmpegArgs.split(/\s+/), { env: process.env });
-
+            this.log.debug('Creating resize process');
             let resizeBuffer = Buffer.alloc(0);
-            ffmpeg.stdout.on('data', (data) => {
-                resizeBuffer = Buffer.concat([resizeBuffer, data]);
-            });
-            ffmpeg.on('error', (error: Error) => {
-                reject('FFmpeg process creation failed: ' + error.message);
-            });
-            ffmpeg.on('close', () => {
-                resolve(resizeBuffer);
-            });
-            ffmpeg.stdin.end(input);
+            const output = new Writable({
+                write(chunk: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void) {
+                    resizeBuffer = Buffer.concat([resizeBuffer, chunk]);
+                }
+            })
+            const options = {input, outputOptions, output, inputOptions: []}
+            const onError = () => {reject('FFmpeg process creation failed for resize'); ffmpeg.stop();}
+            const onEnd = () => resolve(resizeBuffer);
+            const ffmpeg = new FfmpegProcess(this.cameraName, options, this.log, onError, onError, onEnd);
         });
     }
 
@@ -375,7 +359,8 @@ export class StreamingDelegate extends EventEmitter {
                 '-f rtp' ,
                 '-srtp_out_suite AES_CM_128_HMAC_SHA1_80' ,
                 `-srtp_out_params ${sessionInfo.videoSRTP.toString('base64')}` ,
-                `-loglevel level${this.config.debug ? '+verbose' : ''}` ,
+                '-hide_banner',
+                `-loglevel warning` ,
                 '-progress pipe:1'
             ]
 
@@ -398,8 +383,9 @@ export class StreamingDelegate extends EventEmitter {
             });
             activeSession.socket.bind(sessionInfo.videoReturnPort);
 
-            activeSession.mainProcess = new FfmpegProcess(this.cameraName, request.sessionID, {input, output, inputOptions, outputOptions},
-                 this.log, this.config.debug, this.stopStream.bind(this), (sessionID) => this.emit('stream_error', sessionID), callback);
+            this.log.debug('Creating stream process');
+            activeSession.mainProcess = new FfmpegProcess(this.cameraName, {input, output, inputOptions, outputOptions},
+                 this.log,   () => this.stopStream(request.sessionID), () => this.emit('stream_error', request.sessionID), undefined, callback);
 
             this.ongoingSessions.set(request.sessionID, activeSession);
             this.pendingSessions.delete(request.sessionID);
