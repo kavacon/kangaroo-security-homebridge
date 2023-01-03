@@ -38,7 +38,7 @@ export class VideoDoorbellService {
         delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
 
         accessory.configureController(doorbellController);
-        this.configureNotifications(device.deviceId, doorbellController, accessory, delegate);
+        this.configureNotifications(device.deviceId, doorbellController, delegate);
         return {accessory, cleanup: () => { accessory.removeController(doorbellController); delegate.shutdown() }};
     }
     
@@ -47,8 +47,7 @@ export class VideoDoorbellService {
         return this.configure(device, accessory);
     }
 
-    private configureNotifications(deviceId: string, controller: DoorbellController, accessory: PlatformAccessory<KangarooContext>, delegate: StreamingDelegate) {
-        accessory.getService(this.hap.Service.Doorbell)?.getCharacteristic(this.hap.Characteristic.ProgrammableSwitchEvent).sendEventNotification(true);
+    private configureNotifications(deviceId: string, controller: DoorbellController, delegate: StreamingDelegate) {
         controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
 
         this.notificationService.onDoorbell(deviceId, this.doorbellListener(controller, delegate));
@@ -65,10 +64,10 @@ export class VideoDoorbellService {
     private motionListener(controller: DoorbellController, delegate: StreamingDelegate): (alarm: Alarm) => void {
         return (alarm: Alarm) => {
             delegate.updateAlarm(alarm);
-            controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(true);
+            controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
             setTimeout(() =>
                 controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(false)
-                , 10000);
+                , 30000);
         }
     }
 

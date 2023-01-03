@@ -2,7 +2,7 @@
 // changed to dynamically retrieve and stitch feed from remote images
 import {
     CameraStreamingDelegate,
-    HAP,
+    HAP, HAPStatus,
     Logger,
     PrepareStreamCallback,
     PrepareStreamRequest,
@@ -164,6 +164,9 @@ export class StreamingDelegate extends EventEmitter {
     }
 
     fetchSnapshot(imageUrl: string): Promise<Buffer> {
+        if (!imageUrl) {
+            return Promise.reject('no image available for snapshot')
+        }
         return new Promise( (resolve, reject) => {
             const startTime = Date.now();
             const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel error']
@@ -274,7 +277,7 @@ export class StreamingDelegate extends EventEmitter {
             callback(undefined, resized);
         } catch (err) {
             this.log.error(err as string, this.cameraName);
-            callback();
+            callback(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
         }
     }
 
@@ -343,60 +346,70 @@ export class StreamingDelegate extends EventEmitter {
                 (resolution.height > 0 ? resolution.height : 'native') + ', ' + (fps > 0 ? fps : 'native') +
                 ' fps, ' + (videoBitrate > 0 ? videoBitrate : '???') + ' kbps', this.cameraName);
 
-            const input = await this.streamStitch;
-            const output = `srtp://${sessionInfo.address}:${sessionInfo.videoPort}?rtcpport=${sessionInfo.videoPort}'&pkt_size=${mtu}`
-            const inputOptions = [
-                '-stream_loop -1' ,
-                '-an',
-                '-sn',
-                '-dn',
-            ]
-            const outputOptions = [
-                `-codec:v ${vcodec}` ,
-                '-pix_fmt yuv420p' ,
-                '-color_range mpeg' ,
-                `-r ${fps}`,
-                '-preset ultrafast',
-                '-tune zerolatency',
-                `-filter:v ${resolution.videoFilter}` ,
-                `-b:v ${videoBitrate}k`,
-                `-payload_type ${request.video.pt}`,
+            try {
+                const input = await this.streamStitch;
+                const output = `srtp://${sessionInfo.address}:${sessionInfo.videoPort}?rtcpport=${sessionInfo.videoPort}'&pkt_size=${mtu}`
+                const inputOptions = [
+                    '-stream_loop -1',
+                    '-an',
+                    '-sn',
+                    '-dn',
+                ]
+                const outputOptions = [
+                    `-codec:v ${vcodec}`,
+                    '-pix_fmt yuv420p',
+                    '-color_range mpeg',
+                    `-r ${fps}`,
+                    '-preset ultrafast',
+                    '-tune zerolatency',
+                    `-filter:v ${resolution.videoFilter}`,
+                    `-b:v ${videoBitrate}k`,
+                    `-payload_type ${request.video.pt}`,
 
-                // Video Stream
-                `-ssrc ${sessionInfo.videoSSRC}` ,
-                '-f rtp' ,
-                '-srtp_out_suite AES_CM_128_HMAC_SHA1_80' ,
-                `-srtp_out_params ${sessionInfo.videoSRTP.toString('base64')}` ,
-                '-hide_banner',
-                `-loglevel warning` ,
-                '-progress pipe:1'
-            ]
+                    // Video Stream
+                    `-ssrc ${sessionInfo.videoSSRC}`,
+                    '-f rtp',
+                    '-srtp_out_suite AES_CM_128_HMAC_SHA1_80',
+                    `-srtp_out_params ${sessionInfo.videoSRTP.toString('base64')}`,
+                    '-hide_banner',
+                    `-loglevel warning`,
+                    '-progress pipe:1'
+                ]
 
-            const activeSession: ActiveSession = {};
+                const activeSession: ActiveSession = {};
 
-            activeSession.socket = createSocket(sessionInfo.ipv6 ? 'udp6' : 'udp4');
-            activeSession.socket.on('error', (err: Error) => {
-                this.log.error('Socket error: ' + err.message, this.cameraName);
-                this.stopStream(request.sessionID);
-            });
-            activeSession.socket.on('message', () => {
-                if (activeSession.timeout) {
-                    clearTimeout(activeSession.timeout);
-                }
-                activeSession.timeout = setTimeout(() => {
-                    this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
-                    this.emit('stream_error', request.sessionID);
+                activeSession.socket = createSocket(sessionInfo.ipv6 ? 'udp6' : 'udp4');
+                activeSession.socket.on('error', (err: Error) => {
+                    this.log.error('Socket error: ' + err.message, this.cameraName);
                     this.stopStream(request.sessionID);
-                }, request.video.rtcp_interval * 5 * 1000);
-            });
-            activeSession.socket.bind(sessionInfo.videoReturnPort);
+                });
+                activeSession.socket.on('message', () => {
+                    if (activeSession.timeout) {
+                        clearTimeout(activeSession.timeout);
+                    }
+                    activeSession.timeout = setTimeout(() => {
+                        this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
+                        this.emit('stream_error', request.sessionID);
+                        this.stopStream(request.sessionID);
+                    }, request.video.rtcp_interval * 5 * 1000);
+                });
+                activeSession.socket.bind(sessionInfo.videoReturnPort);
 
-            this.log.debug('Creating stream process');
-            activeSession.mainProcess = new FfmpegProcess(this.cameraName, {input, output, inputOptions, outputOptions},
-                 this.log,   () => this.stopStream(request.sessionID), () => this.emit('stream_error', request.sessionID), undefined, callback);
+                this.log.debug('Creating stream process');
+                activeSession.mainProcess = new FfmpegProcess(this.cameraName, {
+                        input,
+                        output,
+                        inputOptions,
+                        outputOptions
+                    },
+                    this.log, () => this.stopStream(request.sessionID), () => this.emit('stream_error', request.sessionID), undefined, callback);
 
-            this.ongoingSessions.set(request.sessionID, activeSession);
-            this.pendingSessions.delete(request.sessionID);
+                this.ongoingSessions.set(request.sessionID, activeSession);
+                this.pendingSessions.delete(request.sessionID);
+            } catch (err) {
+                this.log.error('Error starting stream for %s', this.cameraName, err);
+                callback(new Error('Error starting stream for ' + this.cameraName));
+            }
         } else {
             this.log.error('Error finding session information.', this.cameraName);
             callback(new Error('Error finding session information'));
