@@ -191,8 +191,8 @@ export class StreamingDelegate extends EventEmitter {
                 const outputFile = temp.path({suffix: '.mp4'})
                 const startTime = Date.now();
                 const videoOptions = {
-                    fps: 25,
-                    loop: 1, // seconds
+                    fps: 30,
+                    loop: 3, // seconds
                     transition: false,
                     videoBitrate: 1024,
                     videoCodec: 'libx264',
