@@ -20,7 +20,6 @@ import { createSocket, Socket } from 'dgram';
 import ffmpegPath from 'ffmpeg-for-homebridge';
 import ffProbePath from 'ffprobe-static';
 import pickPort, { pickPortOptions } from 'pick-port';
-import { VideoConfig } from './config';
 import { FfmpegProcess } from './ffmpeg';
 import EventEmitter from "events";
 import {Alarm} from "../model";
@@ -88,7 +87,6 @@ export class StreamingDelegate extends EventEmitter {
     private readonly hap: HAP;
     private readonly log: Logger;
     private readonly cameraName: string;
-    private readonly config: VideoConfig;
     private readonly videoProcessor: string;
     private snapshot: Promise<Buffer>;
     private streamStitch: Promise<string>;
@@ -97,11 +95,10 @@ export class StreamingDelegate extends EventEmitter {
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
-    constructor(log: Logger, config: VideoConfig, hap: HAP, cameraName: string, initialAlarm: Alarm) {
+    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm: Alarm) {
         super();
         this.log = log;
         this.hap = hap;
-        this.config = config;
 
         this.cameraName = cameraName;
         this.videoProcessor = ffmpegPath || 'ffmpeg';
@@ -109,23 +106,13 @@ export class StreamingDelegate extends EventEmitter {
         this.streamStitch = this.fetchStreamStitch(initialAlarm.images);
     }
 
-    private determineResolution(request: SnapshotRequest | VideoInfo, isSnapshot: boolean): ResolutionInfo {
+    private determineResolution(request: SnapshotRequest | VideoInfo): ResolutionInfo {
         const resInfo: ResolutionInfo = {
             width: request.width,
             height: request.height
         };
-        if (!isSnapshot) {
-            if (this.config.maxWidth !== undefined &&
-                (this.config.forceMax || request.width > this.config.maxWidth)) {
-                resInfo.width = this.config.maxWidth;
-            }
-            if (this.config.maxHeight !== undefined &&
-                (this.config.forceMax || request.height > this.config.maxHeight)) {
-                resInfo.height = this.config.maxHeight;
-            }
-        }
 
-        const filters: Array<string> = this.config.videoFilter?.split(',') || [];
+        const filters: Array<string> = [];
         const noneFilter = filters.indexOf('none');
         if (noneFilter >= 0) {
             filters.splice(noneFilter, 1);
@@ -184,7 +171,7 @@ export class StreamingDelegate extends EventEmitter {
                 const runtime = (Date.now() - startTime) / 1000;
                 let message = 'Fetching snapshot took ' + runtime + ' seconds.';
                 if (runtime < 5) {
-                    this.log.debug(message, this.cameraName, this.config.debug);
+                    this.log.debug(message, this.cameraName);
                 } else {
                     if (runtime < 22) {
                         this.log.warn(message, this.cameraName);
@@ -261,27 +248,24 @@ export class StreamingDelegate extends EventEmitter {
         });
     }
 
-    async handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): Promise<void> {
-        const resolution = this.determineResolution(request, true);
-
-        try {
-            this.log.debug('Snapshot requested: ' + request.width + ' x ' + request.height,
-                this.cameraName, this.config.debug);
-
-            const snapshot = await this.snapshot;
-
-            this.log.debug('Sending snapshot: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
-                (resolution.height > 0 ? resolution.height : 'native'), this.cameraName, this.config.debug);
-
-            const resized = await this.resize(snapshot, resolution.resizeFilter);
-            callback(undefined, resized);
-        } catch (err) {
+    handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
+        const resolution = this.determineResolution(request);
+        this.log.debug('Snapshot requested: ' + request.width + ' x ' + request.height,
+            this.cameraName);
+        this.snapshot
+            .then( snapshot => {
+                this.log.debug('Sending snapshot: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
+                    (resolution.height > 0 ? resolution.height : 'native'), this.cameraName);
+                return this.resize(snapshot, resolution.resizeFilter);
+            })
+            .then(resized => callback(undefined, resized))
+            .catch(err => {
             this.log.error(err as string, this.cameraName);
             callback(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
-        }
+        })
     }
 
-    async prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): Promise<void> {
+    prepareStream(request: PrepareStreamRequest, callback: PrepareStreamCallback): void {
         const ipv6 = request.addressVersion === 'ipv6';
 
         const options: pickPortOptions = {
@@ -289,141 +273,131 @@ export class StreamingDelegate extends EventEmitter {
             ip: ipv6 ? '::' : '0.0.0.0',
             reserveTimeout: 15
         };
-        const videoReturnPort = await pickPort(options);
-        const videoSSRC = this.hap.CameraController.generateSynchronisationSource();
+        pickPort(options)
+            .then(videoReturnPort => {
+                const videoSSRC = this.hap.CameraController.generateSynchronisationSource();
 
-        const sessionInfo: SessionInfo = {
-            address: request.targetAddress,
-            ipv6: ipv6,
+                const sessionInfo: SessionInfo = {
+                    address: request.targetAddress,
+                    ipv6: ipv6,
 
-            videoPort: request.video.port,
-            videoReturnPort: videoReturnPort,
-            videoCryptoSuite: request.video.srtpCryptoSuite,
-            videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
-            videoSSRC: videoSSRC,
-        };
+                    videoPort: request.video.port,
+                    videoReturnPort: videoReturnPort,
+                    videoCryptoSuite: request.video.srtpCryptoSuite,
+                    videoSRTP: Buffer.concat([request.video.srtp_key, request.video.srtp_salt]),
+                    videoSSRC: videoSSRC,
+                };
 
-        const response: PrepareStreamResponse = {
-            video: {
-                port: videoReturnPort,
-                ssrc: videoSSRC,
+                const response: PrepareStreamResponse = {
+                    video: {
+                        port: videoReturnPort,
+                        ssrc: videoSSRC,
 
-                srtp_key: request.video.srtp_key,
-                srtp_salt: request.video.srtp_salt
-            },
-        };
+                        srtp_key: request.video.srtp_key,
+                        srtp_salt: request.video.srtp_salt
+                    },
+                };
 
-        this.pendingSessions.set(request.sessionID, sessionInfo);
-        callback(undefined, response);
+                this.pendingSessions.set(request.sessionID, sessionInfo);
+                callback(undefined, response);
+            });
     }
 
-    private async startStream(request: StartStreamRequest, callback: StreamRequestCallback): Promise<void>{
+    private startStream(request: StartStreamRequest, callback: StreamRequestCallback): void{
         const sessionInfo = this.pendingSessions.get(request.sessionID);
         if (sessionInfo) {
-            const vcodec = this.config.vcodec || 'libx264';
-            const mtu = this.config.packetSize || 1316; // request.video.mtu is not used
+            const vcodec = 'libx264';
+            const mtu = 1316; // request.video.mtu is not used
 
-            const resolution = this.determineResolution(request.video, false);
+            const resolution = this.determineResolution(request.video);
 
-            let fps = (this.config.maxFPS !== undefined &&
-                (this.config.forceMax || request.video.fps > this.config.maxFPS)) ?
-                this.config.maxFPS : request.video.fps;
-            let videoBitrate = (this.config.maxBitrate !== undefined &&
-                (this.config.forceMax || request.video.max_bit_rate > this.config.maxBitrate)) ?
-                this.config.maxBitrate : request.video.max_bit_rate;
-
-            if (vcodec === 'copy') {
-                resolution.width = 0;
-                resolution.height = 0;
-                resolution.videoFilter = undefined;
-                fps = 0;
-                videoBitrate = 0;
-            }
+            const fps = request.video.fps;
+            const videoBitrate = request.video.max_bit_rate;
 
             this.log.debug('Video stream requested: ' + request.video.width + ' x ' + request.video.height + ', ' +
-                request.video.fps + ' fps, ' + request.video.max_bit_rate + ' kbps', this.cameraName, this.config.debug);
+                request.video.fps + ' fps, ' + request.video.max_bit_rate + ' kbps', this.cameraName);
+            const output = `srtp://${sessionInfo.address}:${sessionInfo.videoPort}?rtcpport=${sessionInfo.videoPort}'&pkt_size=${mtu}`
+            const inputOptions = [
+                '-stream_loop -1',
+                '-an',
+                '-sn',
+                '-dn',
+            ]
+            const outputOptions = [
+                `-codec:v ${vcodec}`,
+                '-pix_fmt yuv420p',
+                '-color_range mpeg',
+                `-r ${fps}`,
+                '-preset ultrafast',
+                '-tune zerolatency',
+                `-filter:v ${resolution.videoFilter}`,
+                `-b:v ${videoBitrate}k`,
+                `-payload_type ${request.video.pt}`,
+
+                // Video Stream
+                `-ssrc ${sessionInfo.videoSSRC}`,
+                '-f rtp',
+                '-srtp_out_suite AES_CM_128_HMAC_SHA1_80',
+                `-srtp_out_params ${sessionInfo.videoSRTP.toString('base64')}`,
+                '-hide_banner',
+                `-loglevel warning`,
+                '-progress pipe:1'
+            ]
+
+            const activeSession: ActiveSession = {};
+
+            activeSession.socket = createSocket(sessionInfo.ipv6 ? 'udp6' : 'udp4');
+            activeSession.socket.on('error', (err: Error) => {
+                this.log.error('Socket error: ' + err.message, this.cameraName);
+                this.stopStream(request.sessionID);
+            });
+            activeSession.socket.on('message', () => {
+                if (activeSession.timeout) {
+                    clearTimeout(activeSession.timeout);
+                }
+                activeSession.timeout = setTimeout(() => {
+                    this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
+                    this.emit('stream_error', request.sessionID);
+                    this.stopStream(request.sessionID);
+                }, request.video.rtcp_interval * 5 * 1000);
+            });
+            activeSession.socket.bind(sessionInfo.videoReturnPort);
             this.log.info('Starting video stream: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
                 (resolution.height > 0 ? resolution.height : 'native') + ', ' + (fps > 0 ? fps : 'native') +
                 ' fps, ' + (videoBitrate > 0 ? videoBitrate : '???') + ' kbps', this.cameraName);
+            this.streamStitch
+                .then(input => {
+                    this.log.debug('Creating stream process');
+                    activeSession.mainProcess = new FfmpegProcess(this.cameraName, {
+                            input,
+                            output,
+                            inputOptions,
+                            outputOptions
+                        },
+                        this.log, () => this.stopStream(request.sessionID), () => this.emit('stream_error', request.sessionID), undefined);
 
-            try {
-                const input = await this.streamStitch;
-                const output = `srtp://${sessionInfo.address}:${sessionInfo.videoPort}?rtcpport=${sessionInfo.videoPort}'&pkt_size=${mtu}`
-                const inputOptions = [
-                    '-stream_loop -1',
-                    '-an',
-                    '-sn',
-                    '-dn',
-                ]
-                const outputOptions = [
-                    `-codec:v ${vcodec}`,
-                    '-pix_fmt yuv420p',
-                    '-color_range mpeg',
-                    `-r ${fps}`,
-                    '-preset ultrafast',
-                    '-tune zerolatency',
-                    `-filter:v ${resolution.videoFilter}`,
-                    `-b:v ${videoBitrate}k`,
-                    `-payload_type ${request.video.pt}`,
-
-                    // Video Stream
-                    `-ssrc ${sessionInfo.videoSSRC}`,
-                    '-f rtp',
-                    '-srtp_out_suite AES_CM_128_HMAC_SHA1_80',
-                    `-srtp_out_params ${sessionInfo.videoSRTP.toString('base64')}`,
-                    '-hide_banner',
-                    `-loglevel warning`,
-                    '-progress pipe:1'
-                ]
-
-                const activeSession: ActiveSession = {};
-
-                activeSession.socket = createSocket(sessionInfo.ipv6 ? 'udp6' : 'udp4');
-                activeSession.socket.on('error', (err: Error) => {
-                    this.log.error('Socket error: ' + err.message, this.cameraName);
-                    this.stopStream(request.sessionID);
+                    this.ongoingSessions.set(request.sessionID, activeSession);
+                    this.pendingSessions.delete(request.sessionID);
+                    callback();
+                })
+                .catch(err => {
+                    this.log.error('Error starting stream for %s', this.cameraName, err);
+                    callback(new Error('Error starting stream for ' + this.cameraName));
                 });
-                activeSession.socket.on('message', () => {
-                    if (activeSession.timeout) {
-                        clearTimeout(activeSession.timeout);
-                    }
-                    activeSession.timeout = setTimeout(() => {
-                        this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
-                        this.emit('stream_error', request.sessionID);
-                        this.stopStream(request.sessionID);
-                    }, request.video.rtcp_interval * 5 * 1000);
-                });
-                activeSession.socket.bind(sessionInfo.videoReturnPort);
-
-                this.log.debug('Creating stream process');
-                activeSession.mainProcess = new FfmpegProcess(this.cameraName, {
-                        input,
-                        output,
-                        inputOptions,
-                        outputOptions
-                    },
-                    this.log, () => this.stopStream(request.sessionID), () => this.emit('stream_error', request.sessionID), undefined, callback);
-
-                this.ongoingSessions.set(request.sessionID, activeSession);
-                this.pendingSessions.delete(request.sessionID);
-            } catch (err) {
-                this.log.error('Error starting stream for %s', this.cameraName, err);
-                callback(new Error('Error starting stream for ' + this.cameraName));
-            }
         } else {
             this.log.error('Error finding session information.', this.cameraName);
             callback(new Error('Error finding session information'));
         }
     }
 
-    async handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): Promise<void> {
+    handleStreamRequest(request: StreamingRequest, callback: StreamRequestCallback): void {
         switch (request.type) {
             case StreamRequestTypes.START:
-                await this.startStream(request, callback);
+                this.startStream(request, callback);
                 break;
             case StreamRequestTypes.RECONFIGURE:
                 this.log.debug('Received request to reconfigure: ' + request.video.width + ' x ' + request.video.height + ', ' +
-                    request.video.fps + ' fps, ' + request.video.max_bit_rate + ' kbps (Ignored)', this.cameraName, this.config.debug);
+                    request.video.fps + ' fps, ' + request.video.max_bit_rate + ' kbps (Ignored)', this.cameraName);
                 callback();
                 break;
             case StreamRequestTypes.STOP:

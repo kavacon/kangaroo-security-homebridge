@@ -12,13 +12,11 @@ export interface FfmpegProcessOptions {
     outputOptions: string[],
 }
 
-export type FfmpegCallback<T> = (arg?: Error | T) => void;
-
 export class FfmpegProcess<T> {
     private readonly command;
     private killTimeout?: NodeJS.Timeout;
 
-    constructor(cameraName: string, options: FfmpegProcessOptions, log: Logger, onError: CallableFunction, onFailure: CallableFunction, onEnd?: CallableFunction, callback?: FfmpegCallback<T>) {
+    constructor(cameraName: string, options: FfmpegProcessOptions, log: Logger, onError: CallableFunction, onFailure: CallableFunction, onEnd?: CallableFunction) {
         log.debug('command: %s %s %s %s', !(options.input instanceof Buffer) && options.input,
             options.inputOptions.join(' '), options.outputOptions?.join(' ') || '',
             typeof options.output == "string" && options.output,
@@ -50,22 +48,17 @@ export class FfmpegProcess<T> {
             })
             .on('error', (error: Error) => {
                 if (error.message.includes('SIGKILL')) {
-                    this.handleKillSignal(log, cameraName, onError, onFailure, callback);
+                    this.handleKillSignal(log, cameraName, onError, onFailure);
                 } else {
                     log.error('FFmpeg process creation failed: ' + error.message, cameraName);
-                    if (callback) {
-                        callback(new Error('FFmpeg process creation failed'));
-                    }
                     onError();
+                    onFailure();
                 }
             })
         .on('stderr', (line: string) => {
-            if (callback) {
-                callback();
-                callback = undefined;
-            }
             if (line.match(/\[(panic|fatal|error)\]/)) { // For now only write anything out when debug is set
                 log.error(line, cameraName);
+                onFailure()
             } else {
                 log.debug(line, cameraName);
             }
@@ -97,7 +90,7 @@ export class FfmpegProcess<T> {
         return cmd;
     }
 
-    private handleKillSignal(log: Logger, cameraName: string, onError: CallableFunction, onFailure: CallableFunction, callback?: FfmpegCallback<T>) {
+    private handleKillSignal(log: Logger, cameraName: string, onError: CallableFunction, onFailure: CallableFunction) {
         return () => {
             if (this.killTimeout) {
                 clearTimeout(this.killTimeout);
@@ -110,11 +103,7 @@ export class FfmpegProcess<T> {
             } else {
                 log.error(message + ' (Error)', cameraName);
                 onError();
-                if (callback) {
-                    callback(new Error(message));
-                } else {
-                    onFailure();
-                }
+                onFailure();
             }
         }
     }
