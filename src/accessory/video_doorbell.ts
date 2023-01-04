@@ -50,8 +50,8 @@ export class VideoDoorbellService {
     private configureNotifications(deviceId: string, controller: DoorbellController, delegate: StreamingDelegate) {
         controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
 
-        this.notificationService.onDoorbell(deviceId, this.doorbellListener(controller, delegate));
-        this.notificationService.onMotionDetected(deviceId, this.motionListener(controller, delegate));
+        this.notificationService.on(`doorbell_ring_${deviceId}`, this.doorbellListener(controller, delegate));
+        this.notificationService.on(`motion_detected_${deviceId}`, this.motionListener(controller, delegate));
     }
 
     private doorbellListener(controller: DoorbellController, delegate: StreamingDelegate): (alarm: Alarm) => void {

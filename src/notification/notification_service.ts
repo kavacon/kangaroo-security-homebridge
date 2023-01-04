@@ -1,4 +1,4 @@
-import {Alarm, DOORBELL_ALARM, MOTION_ALARM} from "../model";
+import {Alarm, Device, DOORBELL_ALARM, MOTION_ALARM} from "../model";
 import {Client} from "../client/client";
 import {Logging} from "homebridge";
 import Timeout = NodeJS.Timeout;
@@ -9,46 +9,65 @@ const POLLING_DURATION_MILLISECONDS = 20000;
 export declare interface NotificationService {
     on<T extends string>(event: `doorbell_ring_${T}`, listener: (alarm: Alarm) => void): this;
     on<T extends string>(event: `motion_detected_${T}`, listener: (alarm: Alarm) => void): this;
+    on(event: 'new_device', listener: (device: Device, homeId: string) => void): this;
+    on(event: 'removed_device', listener: (device: string) => void): this;
 
     emit<T extends string>(event: `doorbell_ring_${T}`, alarm: Alarm): boolean;
     emit<T extends string>(event: `motion_detected_${T}`, alarm: Alarm): boolean;
+    emit(event: 'new_device', device: Device, homeId: string): boolean
+    emit(event: 'removed_device', device: string): boolean
 }
 
 export class NotificationService extends EventEmitter {
     private readonly log: Logging;
     private readonly client: Client;
-    private readonly interval: Timeout;
+    private interval?: Timeout;
     private readonly lastAlarmByDevice: Map<string, string> = new Map();
+    private knownDevices: string[] = [];
 
     constructor(log: Logging, client: Client) {
         super();
         this.log = log;
         this.client = client;
-        this.interval = setInterval(this.runPoll.bind(this), POLLING_DURATION_MILLISECONDS);
     }
 
     onShutdown() {
         clearInterval(this.interval);
     }
 
-    onDoorbell(deviceId: string, listener: (alarm: Alarm) => void) {
-        this.on(`doorbell_ring_${deviceId}`, listener);
-    }
-
-    onMotionDetected(deviceId: string, listener: (alarm: Alarm) => void) {
-        this.on(`motion_detected_${deviceId}`, listener);
+    start(devices: string[]) {
+        this.knownDevices.push(...devices)
+        this.interval = setInterval(this.runPoll.bind(this), POLLING_DURATION_MILLISECONDS);
     }
 
     private runPoll() {
         this.client.account()
-            .then(({homes}) =>
-                homes
-                    .flatMap(({devices}) => devices)
-                    .forEach(({lastAlarm}) => this.notify(lastAlarm)))
+            .then(({homes}) => {
+                homes.forEach(h => h.devices.forEach(d => this.notifyDevice(d, h.homeId)));
+                return homes.flatMap(({devices}) => devices)
+            })
+            .then(devices => {
+                this.updateKnownDevices(devices);
+            })
             .catch(reason => this.log(`notification service polling failed with reason ${reason}`))
     }
 
-    private notify(alarm: Alarm) {
+    private updateKnownDevices(devices: Device[]) {
+        const deviceList = devices.map(d => d.deviceId);
+        const staleDevices = this.knownDevices.filter(id => !deviceList.some(d => d === id));
+        staleDevices.forEach(d => this.emit('removed_device', d));
+        this.knownDevices = deviceList;
+    }
+
+    private notifyDevice(device: Device, homeId: string) {
+        if (!this.knownDevices.some(id => id === device.deviceId)) {
+            this.emit('new_device', device, homeId);
+        } else {
+            this.notifyAlarm(device.lastAlarm);
+        }
+    }
+
+    private notifyAlarm(alarm: Alarm) {
         if (!this.lastAlarmByDevice.get(alarm.deviceId)) {
             this.lastAlarmByDevice.set(alarm.deviceId, alarm.alarmId);
         }
