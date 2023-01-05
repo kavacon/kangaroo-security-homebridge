@@ -40,6 +40,7 @@ export class VideoDoorbellService {
         const delegate = new StreamingDelegate(this.log, this.hap, device.deviceName, device.lastAlarm);
         const doorbellOptions = this.getDoorbellControllerOptions(delegate, device.deviceName)
         const doorbellController = new this.hap.DoorbellController(doorbellOptions);
+        doorbellController.motionService?.getCharacteristic(this.hap.Characteristic.StatusActive).updateValue(true);
         delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
 
         accessory.configureController(doorbellController);
