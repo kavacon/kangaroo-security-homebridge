@@ -53,7 +53,7 @@ export class AccessoryService {
 
     updateAccessory(baseAccessory: PlatformAccessory<KangarooContext>) {
         const res = this.client.getDevice(baseAccessory.context.homeId, baseAccessory.context.deviceId);
-        return res.then( device => {
+        res.then( device => {
             const service = baseAccessory.getService(this.hap.Service.AccessoryInformation);
             service?.getCharacteristic(this.hap.Characteristic.FirmwareRevision).updateValue(''+device.fwVersion)
             service?.getCharacteristic(this.hap.Characteristic.Name).updateValue(device.deviceName)

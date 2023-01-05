@@ -1,7 +1,7 @@
-import fetch from 'node-fetch';
 import {Account, Alarm, Device} from "../model";
 import {Logging} from "homebridge";
 import {AuthManager} from "./auth_manager";
+import {fetch, HttpMethod} from "./fetch";
 
 const BASE_URL = 'https://api.heykangaroo.com/v1/me'
 
@@ -38,20 +38,26 @@ export class Client {
         return this.send<Account>(BASE_URL, 'GET')
     }
 
-    private send<T>(url: string, method: string, body?: any): Promise<T> {
-        return this.authManager.getAuthToken()
-            .then(authToken =>
-                fetch(url, {
-                    method,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Authorization': authToken,
-                    },
-                    body: JSON.stringify(body)
-                })
-            ).then(result => {
-                this.log.info(`Completed ${method} ${url}`);
-                return result.json();
-            });
+    private async send<T>(url: string, method: HttpMethod, body?: any, isRetry: boolean = false): Promise<T> {
+        try {
+            const authToken = await this.authManager.getAuthToken()
+            const res = await fetch<T>(url, method,
+                {
+                    'Content-Type': 'application/json',
+                    'X-Authorization': authToken,
+                }, body);
+            this.log.info(`Completed ${method} ${url}`);
+            return res;
+        } catch (err) {
+            if (isRetry) {
+                this.log.error(`Retry failed error on ${method} ${url} with message [${err}]`)
+                throw err;
+            } else {
+                this.log.error(`Encountered error on ${method} ${url} [${err}]`)
+                this.log.warn(`Suspect authorisation expired for ${method} ${url} invalidating token and retrying`)
+                this.authManager.refresh();
+                return this.send(url, method, body, true);
+            }
+        }
     }
 }

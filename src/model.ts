@@ -7,6 +7,7 @@ export enum DeviceType {
 export enum BatteryStatus {
     OK = 'ok',
 }
+
 enum Country {
     AU = 'AU',
 }
