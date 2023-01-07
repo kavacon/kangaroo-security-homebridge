@@ -9,8 +9,7 @@ import {
     HAP,
     Logging,
     Nullable,
-    PlatformAccessory,
-    Service
+    PlatformAccessory, PlatformConfig,
 } from "homebridge";
 import {Alarm, BatteryStatus, Device, KangarooContext} from "../model";
 import {Client} from "../client/client";
@@ -21,23 +20,22 @@ export class VideoDoorbellService {
     private readonly log: Logging;
     private readonly hap: HAP;
     private readonly client: Client;
+    private readonly config: PlatformConfig
     private readonly notificationService: NotificationService;
 
-    constructor(log: Logging, hap: HAP, client: Client, notificationService: NotificationService) {
+    constructor(log: Logging, hap: HAP, client: Client, config: PlatformConfig, notificationService: NotificationService) {
         this.log = log;
         this.hap = hap;
         this.client = client;
+        this.config = config;
         this.notificationService = notificationService;
     }
     
     configure(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
-        const { context } = accessory;
-        const cameraOperatingMode = this.configureCamera(device, context);
-        const battery = this.configureBattery(device, context);
-        accessory.addService(cameraOperatingMode);
-        accessory.addService(battery);
+        this.configureCamera(device, accessory);
+        this.configureBattery(device, accessory);
 
-        const delegate = new StreamingDelegate(this.log, this.hap, device.deviceName, device.lastAlarm);
+        const delegate = new StreamingDelegate(this.log, this.hap, device.deviceName, device.lastAlarm, this.config.videoStitchOptions);
         const doorbellOptions = this.getDoorbellControllerOptions(delegate, device.deviceName)
         const doorbellController = new this.hap.DoorbellController(doorbellOptions);
         doorbellController.motionService?.getCharacteristic(this.hap.Characteristic.StatusActive).updateValue(true);
@@ -46,12 +44,6 @@ export class VideoDoorbellService {
         accessory.configureController(doorbellController);
         this.configureNotifications(device.deviceId, doorbellController, delegate);
         return {accessory, cleanup: () => { accessory.removeController(doorbellController); delegate.shutdown() }};
-    }
-    
-    update(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
-        accessory.removeService(accessory.getService(this.hap.Service.CameraOperatingMode)!);
-        accessory.removeService(accessory.getService(this.hap.Service.Battery)!);
-        return this.configure(device, accessory);
     }
 
     private configureNotifications(deviceId: string, controller: DoorbellController, delegate: StreamingDelegate) {
@@ -104,33 +96,42 @@ export class VideoDoorbellService {
         };
     }
 
-    private configureCamera(device: Device, context: KangarooContext): Service {
-        const cameraService = new this.hap.Service.CameraOperatingMode(device.deviceName);
+    private configureCamera(device: Device, accessory: PlatformAccessory<KangarooContext>) {
+        const { context } = accessory;
+        const previousService = accessory.getService(this.hap.Service.CameraOperatingMode)
+        const cameraService = previousService || new this.hap.Service.CameraOperatingMode(device.deviceName);
         cameraService
             .getCharacteristic(this.hap.Characteristic.EventSnapshotsActive)
+            .removeOnSet()
             .onSet(this.setWith(context, this.handleEventSnapshotsActiveSet.bind(this)))
             .updateValue(this.hap.Characteristic.EventSnapshotsActive.ENABLE);
         cameraService
             .getCharacteristic(this.hap.Characteristic.HomeKitCameraActive)
+            .removeOnGet()
             .onGet(this.getWith(context, this.handleHomeKitCameraActiveGet.bind(this)))
             .updateValue(device.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF)
         cameraService
             .getCharacteristic(this.hap.Characteristic.NightVision)
+            .removeOnGet()
+            .removeOnSet()
             .onGet(this.getWith(context, this.handleHomeKitNightVisionGet.bind(this)))
             .onSet(this.setWith(context, this.handleHomeKitNightVisionSet.bind(this)));
         cameraService.isPrimaryService = true;
-        return cameraService;
+        !previousService && accessory.addService(cameraService)
     }
 
-    private configureBattery(device: Device, context: KangarooContext): Service {
-        const battery = new this.hap.Service.Battery(device.deviceName);
+    private configureBattery(device: Device, accessory: PlatformAccessory<KangarooContext>) {
+        const { context } = accessory;
+        const previousService = accessory.getService(this.hap.Service.Battery)
+        const battery = previousService || new this.hap.Service.Battery(device.deviceName);
         battery.getCharacteristic(this.hap.Characteristic.StatusLowBattery)
+            .removeOnGet()
             .onGet(this.getWith(context, this.handleStatusLowBatteryGet.bind(this)))
             .updateValue(device.batteryStatus === BatteryStatus.OK
                 ? this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL
                 : this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW
             );
-        return battery;
+        !previousService && accessory.addService(battery);
     }
 
     private getWith(context: KangarooContext, getter: (context: KangarooContext) => Promise<Nullable<CharacteristicValue>>): CharacteristicGetHandler {

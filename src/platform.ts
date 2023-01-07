@@ -36,7 +36,7 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
             register: a => this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, a),
             unregister: a => this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, a),
         }
-        this.accessoryService = new AccessoryService(log, accessoryApi, hap, this.client, this.notificationService);
+        this.accessoryService = new AccessoryService(log, accessoryApi, hap, config, this.client, this.notificationService);
 
         this.log.info('Kangaroo Security bridge starting up');
         // Only occurs once all existing accessories have been loaded

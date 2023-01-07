@@ -61,6 +61,12 @@ type ActiveSession = {
     socket?: Socket;
 };
 
+type VideoStitchOptions = {
+    fps?: number,
+    runtime?: number,
+    rotation?: number
+}
+
 interface BufferStream {
     buffer: () => Buffer;
     stream: WritableStream;
@@ -87,7 +93,7 @@ export class StreamingDelegate extends EventEmitter {
     private readonly hap: HAP;
     private readonly log: Logger;
     private readonly cameraName: string;
-    private readonly videoProcessor: string;
+    private readonly options?: VideoStitchOptions;
     private snapshot: Promise<Buffer>;
     private streamStitch: Promise<string>;
 
@@ -95,13 +101,13 @@ export class StreamingDelegate extends EventEmitter {
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
-    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm: Alarm) {
+    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm: Alarm, options?: VideoStitchOptions,) {
         super();
         this.log = log;
         this.hap = hap;
+        this.options = options;
 
         this.cameraName = cameraName;
-        this.videoProcessor = ffmpegPath || 'ffmpeg';
         this.snapshot = this.fetchSnapshot(initialAlarm.images[0]);
         this.streamStitch = this.fetchStreamStitch(initialAlarm.images);
     }
@@ -157,6 +163,9 @@ export class StreamingDelegate extends EventEmitter {
         return new Promise( (resolve, reject) => {
             const startTime = Date.now();
             const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel error']
+            if (this.options?.rotation) {
+                outputOptions.push(`-filter:v rotate=${this.options.rotation}*(PI/180)`)
+            }
             this.log.debug('Creating snapshot process');
             const output = bufferStream();
             const options = {input: imageUrl, outputOptions, output: output.stream, inputOptions: []}
@@ -191,13 +200,13 @@ export class StreamingDelegate extends EventEmitter {
                 const outputFile = temp.path({suffix: '.mp4'})
                 const startTime = Date.now();
                 const videoOptions = {
-                    fps: 30,
-                    loop: 3, // seconds
+                    fps: this.options?.fps || 60,
+                    loop: this.options?.runtime || 3, // seconds
                     transition: false,
                     videoBitrate: 1024,
                     videoCodec: 'libx264',
                     format: 'mp4',
-                    pixelFormat: 'yuv420p',
+                    pixelFormat: 'yuv420p'
                 }
 
                 videoshow(inputFiles, videoOptions)
@@ -308,6 +317,7 @@ export class StreamingDelegate extends EventEmitter {
         if (sessionInfo) {
             const vcodec = 'libx264';
             const mtu = 1316; // request.video.mtu is not used
+            const rotation = this.options?.rotation ? `,rotate=${this.options.rotation}*(PI/180)` : '';
 
             const resolution = this.determineResolution(request.video);
 
@@ -330,7 +340,7 @@ export class StreamingDelegate extends EventEmitter {
                 `-r ${fps}`,
                 '-preset ultrafast',
                 '-tune zerolatency',
-                `-filter:v ${resolution.videoFilter}`,
+                `-filter:v ${resolution.videoFilter + rotation}`,
                 `-b:v ${videoBitrate}k`,
                 `-payload_type ${request.video.pt}`,
 

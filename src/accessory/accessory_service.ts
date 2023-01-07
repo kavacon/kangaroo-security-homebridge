@@ -1,6 +1,6 @@
 import {Device, DeviceType, KangarooContext} from "../model";
 import {VideoDoorbellService} from "./video_doorbell";
-import {Logging, PlatformAccessory, API, HAP, Categories, CharacteristicValue} from "homebridge";
+import {Logging, PlatformAccessory, HAP, Categories, CharacteristicValue, PlatformConfig} from "homebridge";
 import {Client} from "../client/client";
 import {NotificationService} from "../notification/notification_service";
 
@@ -21,17 +21,17 @@ export class AccessoryService {
     private deleteQueue: PlatformAccessory<KangarooContext>[] = [];
     private shutdownActions: (() => void)[] = []
 
-    constructor(log: Logging, api: AccessoryApi, hap: HAP, client: Client, notificationService: NotificationService) {
+    constructor(log: Logging, api: AccessoryApi, hap: HAP, config: PlatformConfig, client: Client, notificationService: NotificationService) {
         this.log = log;
         this.api = api;
         this.hap = hap;
         this.client = client;
-        this.videoDoorbellService = new VideoDoorbellService(log, hap, client, notificationService)
+        this.videoDoorbellService = new VideoDoorbellService(log, hap, client, config, notificationService)
         notificationService.on('new_device', this.addDevice.bind(this))
         notificationService.on('removed_device', this.deleteDevice.bind(this))
     }
 
-    fromDevice(device: Device, homeId: string): PlatformAccessory<KangarooContext> {
+    fromDevice(device: Device, homeId: string): PlatformAccessory<KangarooContext> | undefined {
         const cachedAccessory = this.cachedAccessories.find(a => a.context.deviceId === device.deviceId)
         if (cachedAccessory) {
             return cachedAccessory;
@@ -47,7 +47,7 @@ export class AccessoryService {
                 this.accessories.push(accessory);
                 return accessory;
             default:
-                throw new Error(`unknown device type" ${device.deviceType}`);
+                this.log.error(`unable to create accessory for ${device.deviceName} unknown device type ${device.deviceType}`);
         }
     }
 
@@ -60,12 +60,12 @@ export class AccessoryService {
 
             switch (device.deviceType) {
                 case DeviceType.DOORCAM:
-                    const {accessory, cleanup } = this.videoDoorbellService.update(device, baseAccessory)
+                    const {accessory, cleanup } = this.videoDoorbellService.configure(device, baseAccessory)
                     this.shutdownActions.push(cleanup);
                     this.cachedAccessories.push(accessory);
                     return;
                 default:
-                    throw new Error(`unknown device type" ${device.deviceType}`);
+                    throw new Error(`unable to update accessory for ${device.deviceName} unknown device type ${device.deviceType}`);
             }
         }).catch( reason => {
             this.log.error('Accessory %s update failed with reason: %s, scheduling for removal', baseAccessory.displayName, reason);
@@ -100,7 +100,7 @@ export class AccessoryService {
 
     private addDevice(device: Device, homeId: string) {
         const accessory = this.fromDevice(device, homeId);
-        this.api.register([accessory])
+        accessory && this.api.register([accessory])
     }
 
     private buildBasicAccessory(device: Device, homeId: string, category: Categories): PlatformAccessory<KangarooContext> {

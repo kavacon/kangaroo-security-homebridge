@@ -22,6 +22,28 @@
         "type": "string",
         "required": true,
         "default": "xxxxxxxxxx"
+      },
+      "videoStitchOptions": {
+        "type": "object",
+        "title": "video stitch options",
+        "required": false,
+        "properties": {
+          "fps": {
+            "title": "frames per second",
+            "type": "number",
+            "required": false
+          },
+          "runtime": {
+            "title": "stitch runtime",
+            "type": "number",
+            "required": false
+          },
+          "rotation": {
+            "title": "rotation angle degrees",
+            "type": "number",
+            "required": false
+          }
+        }
       }
     }
   }
