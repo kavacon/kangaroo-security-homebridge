@@ -337,7 +337,7 @@ export class StreamingDelegate extends EventEmitter {
                 `-codec:v ${vcodec}`,
                 '-pix_fmt yuv420p',
                 '-color_range mpeg',
-                `-r ${fps}`,
+                `-r ${this.options?.fps || request.video.fps}`,
                 '-preset ultrafast',
                 '-tune zerolatency',
                 `-filter:v ${resolution.videoFilter + rotation}`,

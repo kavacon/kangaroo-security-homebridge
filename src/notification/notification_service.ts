@@ -62,7 +62,7 @@ export class NotificationService extends EventEmitter {
     private notifyDevice(device: Device, homeId: string) {
         if (!this.knownDevices.some(id => id === device.deviceId)) {
             this.emit('new_device', device, homeId);
-        } else {
+        } else if (device.lastAlarm) {
             this.notifyAlarm(device.lastAlarm);
         }
     }
