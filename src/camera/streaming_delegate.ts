@@ -2,7 +2,8 @@
 // changed to dynamically retrieve and stitch feed from remote images
 import {
     CameraStreamingDelegate,
-    HAP, HAPStatus,
+    HAP,
+    HAPStatus,
     Logger,
     PrepareStreamCallback,
     PrepareStreamRequest,
@@ -16,11 +17,11 @@ import {
     StreamRequestTypes,
     VideoInfo
 } from 'homebridge';
-import { createSocket, Socket } from 'dgram';
+import {createSocket, Socket} from 'dgram';
 import ffmpegPath from 'ffmpeg-for-homebridge';
 import ffProbePath from 'ffprobe-static';
-import pickPort, { pickPortOptions } from 'pick-port';
-import { FfmpegProcess } from './ffmpeg';
+import pickPort, {pickPortOptions} from 'pick-port';
+import {FfmpegProcess} from './ffmpeg';
 import EventEmitter from "events";
 import {Alarm} from "../model";
 import * as temp from "temp";
@@ -29,13 +30,12 @@ import * as https from "https";
 import videoshow from "videoshow";
 import {Buffer} from "buffer";
 import {Writable} from "stream";
+import {getResourcePath, Resource} from "../util";
 import WritableStream = NodeJS.WritableStream;
 
 process.env.FFMPEG_PATH = ffmpegPath;
 process.env.FFPROBE_PATH = ffProbePath.path;
 temp.track();
-
-const PLACEHOLDER_GIF = '../../images/loading.gif'
 
 type SessionInfo = {
     address: string; // address of the HAP controller
@@ -110,8 +110,8 @@ export class StreamingDelegate extends EventEmitter {
         this.options = options;
 
         this.cameraName = cameraName;
-        this.snapshot = this.fetchSnapshot(PLACEHOLDER_GIF);
-        this.streamStitch = Promise.resolve(PLACEHOLDER_GIF)
+        this.snapshot = this.fetchSnapshot(getResourcePath(Resource.PLACEHOLDER));
+        this.streamStitch = Promise.resolve(getResourcePath(Resource.PLACEHOLDER));
     }
 
     private determineResolution(request: SnapshotRequest | VideoInfo): ResolutionInfo {

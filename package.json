@@ -4,7 +4,7 @@
   "description": "Utility package to connect kangaroo security to homebridge",
   "main": "dist/platform.js",
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build; cp -r src/resources dist/",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
