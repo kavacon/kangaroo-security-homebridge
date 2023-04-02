@@ -41,18 +41,15 @@ export class NotificationService extends EventEmitter {
     }
 
     private runPoll() {
-        let lastStep = 'start';
         this.client.account()
             .then(({homes}) => {
                 homes.forEach(h => h.devices.forEach(d => this.notifyDevice(d, h.homeId)));
-                lastStep = 'find_devices'
                 return homes.flatMap(({devices}) => devices)
             })
             .then(devices => {
                 this.updateKnownDevices(devices);
-                lastStep = 'update_known_devices'
             })
-            .catch(reason => this.log(`notification service polling failed at ${lastStep} with reason ${reason}`))
+            .catch(reason => this.log(`notification service polling failed with reason ${reason}`))
     }
 
     private updateKnownDevices(devices: Device[]) {
