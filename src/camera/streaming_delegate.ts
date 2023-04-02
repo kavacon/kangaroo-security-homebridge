@@ -35,6 +35,8 @@ process.env.FFMPEG_PATH = ffmpegPath;
 process.env.FFPROBE_PATH = ffProbePath.path;
 temp.track();
 
+const PLACEHOLDER_GIF = '../../images/loading.gif'
+
 type SessionInfo = {
     address: string; // address of the HAP controller
     ipv6: boolean;
@@ -108,8 +110,8 @@ export class StreamingDelegate extends EventEmitter {
         this.options = options;
 
         this.cameraName = cameraName;
-        this.snapshot = this.fetchSnapshot(initialAlarm.images[0]);
-        this.streamStitch = this.fetchStreamStitch(initialAlarm.images);
+        this.snapshot = this.fetchSnapshot(PLACEHOLDER_GIF);
+        this.streamStitch = Promise.resolve(PLACEHOLDER_GIF)
     }
 
     private determineResolution(request: SnapshotRequest | VideoInfo): ResolutionInfo {
@@ -149,6 +151,9 @@ export class StreamingDelegate extends EventEmitter {
     }
 
     updateAlarm(alarm: Alarm) {
+        if (!alarm.images) {
+            return;
+        }
         this.snapshot = this.fetchSnapshot(alarm.images[0]);
         this.streamStitch.then(
             path => fs.rmSync(path, {force: true})

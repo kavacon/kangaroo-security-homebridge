@@ -1,6 +1,6 @@
 {
   "name": "homebridge-kangaroo-security",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Utility package to connect kangaroo security to homebridge",
   "main": "dist/platform.js",
   "scripts": {
