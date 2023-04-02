@@ -33,7 +33,7 @@ export interface Alarm {
     homeId: string,
     alarmType: AlarmType,
     backCoverOpened: boolean,
-    images: string[],
+    images?: string[],
     imageID: number,
     createTime: string,
     delUser: string,
