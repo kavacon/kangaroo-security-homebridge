@@ -4,6 +4,11 @@ import ffmpeg from "fluent-ffmpeg";
 import {Readable} from "stream";
 import WritableStream = NodeJS.WritableStream;
 import {Buffer} from "buffer";
+import ffmpegPath from "ffmpeg-for-homebridge";
+import ffProbePath from 'ffprobe-static';
+
+process.env.FFMPEG_PATH = ffmpegPath;
+process.env.FFPROBE_PATH = ffProbePath.path;
 
 export interface FfmpegProcessOptions {
     input: string | Buffer | string[],

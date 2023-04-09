@@ -18,23 +18,19 @@ import {
     VideoInfo
 } from 'homebridge';
 import {createSocket, Socket} from 'dgram';
-import ffmpegPath from 'ffmpeg-for-homebridge';
-import ffProbePath from 'ffprobe-static';
 import pickPort, {pickPortOptions} from 'pick-port';
 import {FfmpegProcess} from './ffmpeg';
 import EventEmitter from "events";
 import {Alarm} from "../model";
 import * as temp from "temp";
 import * as fs from "fs";
-import * as https from "https";
-import videoshow from "videoshow";
 import {Buffer} from "buffer";
 import {Writable} from "stream";
-import {getResourcePath, Resource} from "../util";
+import {getResourcePath, NamedProcess, Resource, thenWithRuntime} from "../util";
 import WritableStream = NodeJS.WritableStream;
+import GIFEncoder from 'gif-encoder';
+import {createCanvas, loadImage} from "canvas";
 
-process.env.FFMPEG_PATH = ffmpegPath;
-process.env.FFPROBE_PATH = ffProbePath.path;
 temp.track();
 
 type SessionInfo = {
@@ -200,52 +196,17 @@ export class StreamingDelegate extends EventEmitter {
     }
 
     fetchStreamStitch(imageUrls: string[]): Promise<string> {
-        return this.fetchImages(imageUrls).then(inputFiles => {
-            return new Promise((resolve, reject) => {
-                const outputFile = temp.path({suffix: '.mp4'})
-                const startTime = Date.now();
-                const videoOptions = {
-                    fps: this.options?.fps || 60,
-                    loop: this.options?.runtime || 3, // seconds
-                    transition: false,
-                    videoBitrate: 1024,
-                    videoCodec: 'libx264',
-                    format: 'mp4',
-                    pixelFormat: 'yuv420p'
-                }
+        const runtimeOptions = {
+            log: this.log,
+            debugMsg: this.cameraName,
+            warnTime: {time: 5, msg: this.cameraName},
+            errorTime: {
+                time: 22,
+                msg: `request has timed out, stitch has not been refreshed in Home Kit ${this.cameraName}`
+            }
+        }
 
-                videoshow(inputFiles, videoOptions)
-                    .save(outputFile)
-                    .on('start', command => {
-                        this.log.debug('Stitch command: ' + command, this.cameraName);
-                    })
-                    .on('error', (err, stdout, stderr) => {
-                        this.log.error('stderr: ' + stderr);
-                        this.log.error('stderr: ' + stdout);
-                        reject('FFmpeg process creation failed: ' + err);
-                    })
-                    .on('end', output => {
-                        if (output) {
-                            resolve(output);
-                        } else {
-                            reject('Failed to fetch photo stitch');
-                        }
-
-                        const runtime = (Date.now() - startTime) / 1000;
-                        let message = 'Fetching stitch took ' + runtime + ' seconds.';
-                        if (runtime < 5) {
-                            this.log.debug(message, this.cameraName);
-                        } else {
-                            if (runtime < 22) {
-                                this.log.warn(message, this.cameraName);
-                            } else {
-                                message += ' The request has timed out and the stitch has not been refreshed in HomeKit.';
-                                this.log.error(message, this.cameraName);
-                            }
-                        }
-                    });
-            });
-        });
+        return thenWithRuntime(() => this.buildGifStitch(imageUrls), runtimeOptions);
     }
 
     resize(input: Buffer, resizeFilter?: string): Promise<Buffer> {
@@ -448,28 +409,30 @@ export class StreamingDelegate extends EventEmitter {
         this.log.info('Stopped video stream.', this.cameraName);
     }
 
-    private fetchImages(imageUrls: string[]): Promise<string[]> {
-        const imageFilePromises = imageUrls.map( url => {
-            return new Promise<string>((resolve, reject) => {
-                https.get(url, response => {
-                    if (response.aborted || response.statusCode != 200) {
-                        this.log.error(`file download for ${response.url} failed`);
-                        reject();
-                    }
-                    const {path} = temp.openSync({suffix: '.jpg'});
-                    this.log.debug(`saving download as ${path}`);
-                    const stream = fs.createWriteStream(path);
-                    response.pipe(stream);
+    private buildGifStitch(imageUrls: string[]): NamedProcess<string> {
+        const imagePromises = imageUrls.map(imageUrl => loadImage(imageUrl))
+        const gif = Promise.all(imagePromises)
+            .then(images => {
+                const {width, height} = {width: images[0].width, height: images[0].height}
+                const encoder = new GIFEncoder(width, height);
+                const {path} = temp.openSync({suffix: '.gif'});
+                this.log.debug(`saving gif as ${path}`);
 
-                    // after download completed close filestream
-                    stream.on("finish", () => {
-                        stream.close();
-                        this.log.debug("Download Completed");
-                        resolve(path);
-                    });
-                })
-            });
-        });
-        return Promise.all(imageFilePromises)
+                encoder.createReadStream().pipe(fs.createWriteStream(path));
+                encoder.start();
+                encoder.setRepeat(0);   // 0 for repeat, -1 for no-repeat
+                encoder.setDelay(500);  // frame delay in ms
+
+                const canvas = createCanvas(width, height);
+                const ctx = canvas.getContext('2d')
+                images.forEach(image => {
+                    ctx.drawImage(image, 0, 0, width, height);
+                    encoder.addFrame(ctx);
+                });
+
+                encoder.finish();
+                return path
+            })
+        return {process: gif, name: 'buildGifStitch'}
     }
 }
