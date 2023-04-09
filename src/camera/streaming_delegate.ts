@@ -28,8 +28,9 @@ import {Buffer} from "buffer";
 import {Writable} from "stream";
 import {getResourcePath, NamedProcess, Resource, thenWithRuntime} from "../util";
 import WritableStream = NodeJS.WritableStream;
-import GIFEncoder from 'gif-encoder';
+import GIFEncoder from 'gifencoder';
 import {createCanvas, loadImage} from "canvas";
+import {createWriteStream} from "fs";
 
 temp.track();
 
@@ -99,7 +100,7 @@ export class StreamingDelegate extends EventEmitter {
     pendingSessions: Map<string, SessionInfo> = new Map();
     ongoingSessions: Map<string, ActiveSession> = new Map();
 
-    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm: Alarm, options?: VideoStitchOptions,) {
+    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm?: Alarm, options?: VideoStitchOptions,) {
         super();
         this.log = log;
         this.hap = hap;
@@ -108,6 +109,9 @@ export class StreamingDelegate extends EventEmitter {
         this.cameraName = cameraName;
         this.snapshot = this.fetchSnapshot(getResourcePath(Resource.PLACEHOLDER));
         this.streamStitch = Promise.resolve(getResourcePath(Resource.PLACEHOLDER));
+        if (initialAlarm) {
+            this.updateAlarm(initialAlarm);
+        }
     }
 
     private determineResolution(request: SnapshotRequest | VideoInfo): ResolutionInfo {
@@ -411,14 +415,19 @@ export class StreamingDelegate extends EventEmitter {
 
     private buildGifStitch(imageUrls: string[]): NamedProcess<string> {
         const imagePromises = imageUrls.map(imageUrl => loadImage(imageUrl))
-        const gif = Promise.all(imagePromises)
-            .then(images => {
+        const gif =
+            new Promise<string>(async (resolve, reject) => {
+                const images = await Promise.all(imagePromises)
                 const {width, height} = {width: images[0].width, height: images[0].height}
-                const encoder = new GIFEncoder(width, height);
                 const {path} = temp.openSync({suffix: '.gif'});
                 this.log.debug(`saving gif as ${path}`);
 
-                encoder.createReadStream().pipe(fs.createWriteStream(path));
+                const writeStream = createWriteStream(path)
+                writeStream.on('close', () => resolve(path))
+                writeStream.on('error', err => reject(err))
+
+                const encoder = new GIFEncoder(width, height);
+                encoder.createReadStream().pipe(writeStream)
                 encoder.start();
                 encoder.setRepeat(0);   // 0 for repeat, -1 for no-repeat
                 encoder.setDelay(500);  // frame delay in ms
@@ -431,7 +440,6 @@ export class StreamingDelegate extends EventEmitter {
                 });
 
                 encoder.finish();
-                return path
             })
         return {process: gif, name: 'buildGifStitch'}
     }

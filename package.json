@@ -34,7 +34,7 @@
     "ffmpeg-for-homebridge": "^0.1.4",
     "ffprobe-static": "^3.1.0",
     "fluent-ffmpeg": "^2.1.2",
-    "gif-encoder": "^0.7.2",
+    "gifencoder": "^2.0.1",
     "pick-port": "^1.0.1",
     "temp": "^0.9.4"
   },

@@ -85,7 +85,7 @@ export interface Device {
     sirenChime: boolean,
     led: boolean,
     irLed: boolean,
-    lastAlarm: Alarm,
+    lastAlarm?: Alarm,
     sirenLinked: string,
     linkedSirenIds: string[],
     tooManyMotionAlerts: boolean,
