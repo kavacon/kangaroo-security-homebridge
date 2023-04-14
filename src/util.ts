@@ -1,7 +1,7 @@
 import path from "path";
 import {Logger} from "homebridge";
 
-export type NamedProcess<T> = {process: Promise<T>, name: string}
+export type NamedPromise<T> = Promise<T> & {name: string}
 
 export type RuntimeOptions = {
     log: Logger
@@ -17,13 +17,13 @@ export function getResourcePath(resource: Resource): string {
     return path.join(__dirname, 'resources', resource);
 }
 
-export function thenWithRuntime<T>(processSupplier: () => NamedProcess<T>, options: RuntimeOptions): Promise<T> {
+export function timedPromise<T>(promiseSupplier: () => NamedPromise<T>, options: RuntimeOptions): Promise<T> {
     const startTime = Date.now();
-    const {process, name} = processSupplier()
-    return process.then(
+    const promise = promiseSupplier()
+    return promise.then(
         value => {
             const runtime = (Date.now() - startTime) / 1000;
-            const infoMsg = `${name} took ${runtime} seconds`;
+            const infoMsg = `${promise.name} took ${runtime} seconds`;
             if (options.errorTime && runtime >= options.errorTime.time) {
                 options.log.error(infoMsg, options.errorTime.msg);
             } else if (options.warnTime && runtime >= options.warnTime.time) {
