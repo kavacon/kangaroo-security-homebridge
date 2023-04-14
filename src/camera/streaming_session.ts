@@ -13,11 +13,11 @@ type Process = FfmpegProcess
 export declare interface StreamingSession {
     on(event: 'session_error', listener: (message: string, session?: StreamingSession) => void): this;
     on(event: 'session_inactive', listener: (session: StreamingSession) => void): this;
-    on(event: 'process_error', listener: (session: StreamingSession) => void): this;
+    on(event: 'process_error', listener: (message: string, session: StreamingSession) => void): this;
 
     emit(event: 'session_error', message: string, session?: StreamingSession): boolean;
     emit(event: 'session_inactive', session: StreamingSession): boolean;
-    emit(event: 'process_error', session: StreamingSession): boolean;
+    emit(event: 'process_error', message: string, session: StreamingSession): boolean;
 
 }
 
@@ -54,9 +54,11 @@ export class StreamingSession extends EventEmitter {
         this.incomingProcess.on('ffmpeg_error', (_, error) => {
             switch (error) {
                 case FfmpegErrorCode.FATAL:
-                    this.emit('process_error', this);
+                    this.emit('process_error', 'unknown process error', this);
             }
         })
+            .on('ffmpeg_finished', () => this.emit(`process_error`,
+                'process ended without kill signal, (Error)', this));
     }
 
     end() {

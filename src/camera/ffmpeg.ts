@@ -84,7 +84,6 @@ class FfmpegProcessImpl extends EventEmitter implements FfmpegProcess {
         })
         .on('end', () => {
             this.emit('ffmpeg_finished');
-            log.error('Process ended without kill signal, (Error) %s', cameraName);
         });
         this.command.run();
     }
@@ -125,7 +124,10 @@ class FfmpegProcessImpl extends EventEmitter implements FfmpegProcess {
     }
 }
 
-
+/**
+ * Self completing ffmpeg process such as a video stitch or image resize. Managed as a promise
+ * as may be long-running but is expected to naturally conclude.
+ */
 export function asyncFfmpeg(cameraName: string, options: FfmpegProcessOptions, log: Logger): Promise<FfmpegProcess> {
     return new Promise((resolve, reject) => {
         const process = new FfmpegProcessImpl(cameraName, options, log);
@@ -134,6 +136,10 @@ export function asyncFfmpeg(cameraName: string, options: FfmpegProcessOptions, l
     });
 }
 
+/**
+ * An ongoing ffmpeg process. Expected to continue running until purposefully interrupted
+ * either by a failure or explicit stop call.
+ */
 export function liveFfmpeg(cameraName: string, options: FfmpegProcessOptions, log: Logger): FfmpegProcess {
     return new FfmpegProcessImpl(cameraName, options, log);
 }

@@ -344,7 +344,8 @@ export class StreamingDelegate extends EventEmitter implements CameraStreamingDe
                 session?.end();
                 this.log.info('Stopped video stream.', this.cameraName);
             });
-            stream.on('process_error', session => {
+            stream.on('process_error', (message, session) => {
+                this.log.error(message, this.cameraName);
                 session.end();
                 this.emit('stream_error', session.id)
             });
