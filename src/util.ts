@@ -1,7 +1,10 @@
 import path from "path";
 import {Logger} from "homebridge";
 
-export type NamedPromise<T> = Promise<T> & {name: string}
+export interface NamedPromise<T> {
+    promise: Promise<T>;
+    name: string;
+}
 
 export type RuntimeOptions = {
     log: Logger
@@ -19,11 +22,11 @@ export function getResourcePath(resource: Resource): string {
 
 export function timedPromise<T>(promiseSupplier: () => NamedPromise<T>, options: RuntimeOptions): Promise<T> {
     const startTime = Date.now();
-    const promise = promiseSupplier()
+    const {promise, name} = promiseSupplier()
     return promise.then(
         value => {
             const runtime = (Date.now() - startTime) / 1000;
-            const infoMsg = `${promise.name} took ${runtime} seconds`;
+            const infoMsg = `${name} took ${runtime} seconds`;
             if (options.errorTime && runtime >= options.errorTime.time) {
                 options.log.error(infoMsg, options.errorTime.msg);
             } else if (options.warnTime && runtime >= options.warnTime.time) {

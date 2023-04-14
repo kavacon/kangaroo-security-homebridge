@@ -191,9 +191,9 @@ export class StreamingDelegate extends EventEmitter implements CameraStreamingDe
                     }
                     throw new Error('Failed to fetch snapshot.');
                 })
-            return {...promise, name: 'fetchSnapshot'}
+            return {promise, name: 'fetchSnapshot'}
         };
-        return timedPromise(promiseSupplier, runtimeOptions)
+        return timedPromise(promiseSupplier,  runtimeOptions)
     }
 
     fetchStreamStitch(imageUrls: string[]): Promise<string> {
@@ -230,7 +230,7 @@ export class StreamingDelegate extends EventEmitter implements CameraStreamingDe
                     return output.buffer();
                 }
             )
-        return {...promise, name: 'resize'};
+        return {promise, name: 'resize'};
     }
 
     handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
@@ -399,7 +399,7 @@ export class StreamingDelegate extends EventEmitter implements CameraStreamingDe
 
     private buildGifStitch(imageUrls: string[]): NamedPromise<string> {
         const imagePromises = imageUrls.map(imageUrl => loadImage(imageUrl))
-        const gif =
+        const promise =
             new Promise<string>(async (resolve, reject) => {
                 const images = await Promise.all(imagePromises)
                 const {width, height} = {width: images[0].width, height: images[0].height}
@@ -425,6 +425,6 @@ export class StreamingDelegate extends EventEmitter implements CameraStreamingDe
 
                 encoder.finish();
             })
-        return { ...gif, name: 'buildGifStitch'}
+        return { promise, name: 'buildGifStitch'}
     }
 }
