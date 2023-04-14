@@ -17,24 +17,21 @@ import {
     StreamRequestTypes,
     VideoInfo
 } from 'homebridge';
-import {createSocket, Socket} from 'dgram';
-import ffmpegPath from 'ffmpeg-for-homebridge';
-import ffProbePath from 'ffprobe-static';
 import pickPort, {pickPortOptions} from 'pick-port';
-import {FfmpegProcess} from './ffmpeg';
+import {FfmpegErrorCode, asyncFfmpeg, liveFfmpeg} from './ffmpeg';
 import EventEmitter from "events";
 import {Alarm} from "../model";
 import * as temp from "temp";
 import * as fs from "fs";
-import * as https from "https";
-import videoshow from "videoshow";
+import {createWriteStream} from "fs";
 import {Buffer} from "buffer";
 import {Writable} from "stream";
-import {getResourcePath, Resource} from "../util";
+import {getResourcePath, NamedPromise, Resource, timedPromise} from "../util";
+import GIFEncoder from 'gifencoder';
+import {createCanvas, loadImage} from "canvas";
 import WritableStream = NodeJS.WritableStream;
+import {StreamingSession} from "./streaming_session";
 
-process.env.FFMPEG_PATH = ffmpegPath;
-process.env.FFPROBE_PATH = ffProbePath.path;
 temp.track();
 
 type SessionInfo = {
@@ -54,13 +51,6 @@ type ResolutionInfo = {
     videoFilter?: string;
     snapFilter?: string;
     resizeFilter?: string;
-};
-
-type ActiveSession = {
-    mainProcess?: FfmpegProcess<void>;
-    returnProcess?: FfmpegProcess<void>;
-    timeout?: NodeJS.Timeout;
-    socket?: Socket;
 };
 
 type VideoStitchOptions = {
@@ -86,12 +76,12 @@ function bufferStream(): BufferStream {
     };
 }
 
-export declare interface StreamingDelegate extends CameraStreamingDelegate {
+export declare interface StreamingDelegate {
     on(event: 'stream_error', listener: (sessionID: string) => void): this;
     emit(event: 'stream_error', sessionID: string): boolean;
 }
 
-export class StreamingDelegate extends EventEmitter {
+export class StreamingDelegate extends EventEmitter implements CameraStreamingDelegate{
     private readonly hap: HAP;
     private readonly log: Logger;
     private readonly cameraName: string;
@@ -100,10 +90,10 @@ export class StreamingDelegate extends EventEmitter {
     private streamStitch: Promise<string>;
 
     // keep track of sessions
-    pendingSessions: Map<string, SessionInfo> = new Map();
-    ongoingSessions: Map<string, ActiveSession> = new Map();
+    requestedStreams: Map<string, SessionInfo> = new Map();
+    activeStreams: Map<string, StreamingSession> = new Map();
 
-    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm: Alarm, options?: VideoStitchOptions,) {
+    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm?: Alarm, options?: VideoStitchOptions,) {
         super();
         this.log = log;
         this.hap = hap;
@@ -112,6 +102,9 @@ export class StreamingDelegate extends EventEmitter {
         this.cameraName = cameraName;
         this.snapshot = this.fetchSnapshot(getResourcePath(Resource.PLACEHOLDER));
         this.streamStitch = Promise.resolve(getResourcePath(Resource.PLACEHOLDER));
+        if (initialAlarm) {
+            this.updateAlarm(initialAlarm);
+        }
     }
 
     private determineResolution(request: SnapshotRequest | VideoInfo): ResolutionInfo {
@@ -142,9 +135,8 @@ export class StreamingDelegate extends EventEmitter {
     }
 
     shutdown() {
-        for (const session in this.ongoingSessions) {
-            this.stopStream(session);
-        }
+        this.activeStreams.forEach(session => session.end())
+        this.activeStreams.clear();
         this.streamStitch.then(
             path => fs.rmSync(path, {force: true})
         );
@@ -165,101 +157,80 @@ export class StreamingDelegate extends EventEmitter {
         if (!imageUrl) {
             return Promise.reject('no image available for snapshot')
         }
-        return new Promise( (resolve, reject) => {
-            const startTime = Date.now();
-            const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel error']
-            if (this.options?.rotation) {
-                outputOptions.push(`-filter:v rotate=${this.options.rotation}*(PI/180)`)
+
+        const runtimeOptions = {
+            log: this.log,
+            debugMsg: this.cameraName,
+            warnTime: {time: 5, msg: this.cameraName},
+            errorTime: {
+                time: 22,
+                msg: `request has timed out, snapshot has not been refreshed in Home Kit ${this.cameraName}`
             }
+        }
+
+        const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel error']
+        if (this.options?.rotation) {
+            outputOptions.push(`-filter:v rotate=${this.options.rotation}*(PI/180)`)
+        }
+
+        const promiseSupplier = () => {
             this.log.debug('Creating snapshot process');
             const output = bufferStream();
             const options = {input: imageUrl, outputOptions, output: output.stream, inputOptions: []}
-            const onError = () => {reject('FFmpeg process creation failed for snapshot'); ffmpeg.stop();}
-            const onEnd = () => {
-                if (output.buffer().length > 0) {
-                    resolve(output.buffer());
-                } else {
-                    reject('Failed to fetch snapshot.');
-                }
-
-                const runtime = (Date.now() - startTime) / 1000;
-                let message = 'Fetching snapshot took ' + runtime + ' seconds.';
-                if (runtime < 5) {
-                    this.log.debug(message, this.cameraName);
-                } else {
-                    if (runtime < 22) {
-                        this.log.warn(message, this.cameraName);
-                    } else {
-                        message += ' The request has timed out and the snapshot has not been refreshed in HomeKit.';
-                        this.log.error(message, this.cameraName);
+            const promise = asyncFfmpeg(this.cameraName, options, this.log)
+                .catch(({error, process}) => {
+                    switch (error) {
+                        case FfmpegErrorCode.FATAL:
+                            process.stop();
+                            throw new Error('FFmpeg process creation failed for snapshot');
                     }
-                }
-            };
-            const ffmpeg = new FfmpegProcess(this.cameraName, options, this.log, onError, onError, onEnd);
-        });
+                })
+                .then(() => {
+                    if (output.buffer().length > 0) {
+                        return output.buffer()
+                    }
+                    throw new Error('Failed to fetch snapshot.');
+                })
+            return {promise, name: 'fetchSnapshot'}
+        };
+        return timedPromise(promiseSupplier,  runtimeOptions)
     }
 
     fetchStreamStitch(imageUrls: string[]): Promise<string> {
-        return this.fetchImages(imageUrls).then(inputFiles => {
-            return new Promise((resolve, reject) => {
-                const outputFile = temp.path({suffix: '.mp4'})
-                const startTime = Date.now();
-                const videoOptions = {
-                    fps: this.options?.fps || 60,
-                    loop: this.options?.runtime || 3, // seconds
-                    transition: false,
-                    videoBitrate: 1024,
-                    videoCodec: 'libx264',
-                    format: 'mp4',
-                    pixelFormat: 'yuv420p'
-                }
+        const runtimeOptions = {
+            log: this.log,
+            debugMsg: this.cameraName,
+            warnTime: {time: 5, msg: this.cameraName},
+            errorTime: {
+                time: 22,
+                msg: `request has timed out, stitch has not been refreshed in Home Kit ${this.cameraName}`
+            }
+        }
 
-                videoshow(inputFiles, videoOptions)
-                    .save(outputFile)
-                    .on('start', command => {
-                        this.log.debug('Stitch command: ' + command, this.cameraName);
-                    })
-                    .on('error', (err, stdout, stderr) => {
-                        this.log.error('stderr: ' + stderr);
-                        this.log.error('stderr: ' + stdout);
-                        reject('FFmpeg process creation failed: ' + err);
-                    })
-                    .on('end', output => {
-                        if (output) {
-                            resolve(output);
-                        } else {
-                            reject('Failed to fetch photo stitch');
-                        }
-
-                        const runtime = (Date.now() - startTime) / 1000;
-                        let message = 'Fetching stitch took ' + runtime + ' seconds.';
-                        if (runtime < 5) {
-                            this.log.debug(message, this.cameraName);
-                        } else {
-                            if (runtime < 22) {
-                                this.log.warn(message, this.cameraName);
-                            } else {
-                                message += ' The request has timed out and the stitch has not been refreshed in HomeKit.';
-                                this.log.error(message, this.cameraName);
-                            }
-                        }
-                    });
-            });
-        });
+        return timedPromise(() => this.buildGifStitch(imageUrls), runtimeOptions);
     }
 
-    resize(input: Buffer, resizeFilter?: string): Promise<Buffer> {
-        return new Promise<Buffer>((resolve, reject) => {
-            const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel warning'];
-            resizeFilter && outputOptions.push(`-filter:v ${resizeFilter}`)
+    resize(input: Buffer, resizeFilter?: string): NamedPromise<Buffer> {
+        const outputOptions = ['-frames:v 1', '-f image2', '-hide_banner', '-loglevel warning'];
+        resizeFilter && outputOptions.push(`-filter:v ${resizeFilter}`)
 
-            this.log.debug('Creating resize process');
-            const output = bufferStream();
-            const options = {input, outputOptions, output: output.stream, inputOptions: []}
-            const onError = () => {reject('FFmpeg process creation failed for resize'); ffmpeg.stop();}
-            const onEnd = () => resolve(output.buffer());
-            const ffmpeg = new FfmpegProcess(this.cameraName, options, this.log, onError, onError, onEnd);
-        });
+        this.log.debug('Creating resize process');
+        const output = bufferStream();
+        const options = {input, outputOptions, output: output.stream, inputOptions: []};
+        const promise = asyncFfmpeg(this.cameraName, options, this.log)
+            .catch(({error, process}) => {
+                switch (error) {
+                    case FfmpegErrorCode.FATAL:
+                        process.stop();
+                        throw new Error('FFmpeg process creation failed for resize');
+
+                }
+            })
+            .then(() => {
+                    return output.buffer();
+                }
+            )
+        return {promise, name: 'resize'};
     }
 
     handleSnapshotRequest(request: SnapshotRequest, callback: SnapshotRequestCallback): void {
@@ -270,7 +241,7 @@ export class StreamingDelegate extends EventEmitter {
             .then( snapshot => {
                 this.log.debug('Sending snapshot: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
                     (resolution.height > 0 ? resolution.height : 'native'), this.cameraName);
-                return this.resize(snapshot, resolution.resizeFilter);
+                return timedPromise(() => this.resize(snapshot, resolution.resizeFilter), {log: this.log});
             })
             .then(resized => callback(undefined, resized))
             .catch(err => {
@@ -312,13 +283,13 @@ export class StreamingDelegate extends EventEmitter {
                     },
                 };
 
-                this.pendingSessions.set(request.sessionID, sessionInfo);
+                this.requestedStreams.set(request.sessionID, sessionInfo);
                 callback(undefined, response);
             });
     }
 
     private startStream(request: StartStreamRequest, callback: StreamRequestCallback): void{
-        const sessionInfo = this.pendingSessions.get(request.sessionID);
+        const sessionInfo = this.requestedStreams.get(request.sessionID);
         if (sessionInfo) {
             const vcodec = 'libx264';
             const mtu = 1316; // request.video.mtu is not used
@@ -359,40 +330,43 @@ export class StreamingDelegate extends EventEmitter {
                 '-progress pipe:1'
             ]
 
-            const activeSession: ActiveSession = {};
+            const stream = new StreamingSession(request.sessionID, {
+                ...sessionInfo,
+                keepAliveSeconds: request.video.rtcp_interval * 5
+            })
+            stream.on('session_inactive', (session) => {
+                this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
+                this.emit('stream_error', session.id);
+                session.end();
+            });
+            stream.on('session_error', (message, session) => {
+                this.log.error(message, this.cameraName);
+                session?.end();
+                this.log.info('Stopped video stream.', this.cameraName);
+            });
+            stream.on('process_error', (message, session) => {
+                this.log.error(message, this.cameraName);
+                session.end();
+                this.emit('stream_error', session.id)
+            });
 
-            activeSession.socket = createSocket(sessionInfo.ipv6 ? 'udp6' : 'udp4');
-            activeSession.socket.on('error', (err: Error) => {
-                this.log.error('Socket error: ' + err.message, this.cameraName);
-                this.stopStream(request.sessionID);
-            });
-            activeSession.socket.on('message', () => {
-                if (activeSession.timeout) {
-                    clearTimeout(activeSession.timeout);
-                }
-                activeSession.timeout = setTimeout(() => {
-                    this.log.info('Device appears to be inactive. Stopping stream.', this.cameraName);
-                    this.emit('stream_error', request.sessionID);
-                    this.stopStream(request.sessionID);
-                }, request.video.rtcp_interval * 5 * 1000);
-            });
-            activeSession.socket.bind(sessionInfo.videoReturnPort);
             this.log.info('Starting video stream: ' + (resolution.width > 0 ? resolution.width : 'native') + ' x ' +
                 (resolution.height > 0 ? resolution.height : 'native') + ', ' + (fps > 0 ? fps : 'native') +
                 ' fps, ' + (videoBitrate > 0 ? videoBitrate : '???') + ' kbps', this.cameraName);
             this.streamStitch
                 .then(input => {
                     this.log.debug('Creating stream process');
-                    activeSession.mainProcess = new FfmpegProcess(this.cameraName, {
+                    const process = liveFfmpeg(this.cameraName, {
                             input,
                             output,
                             inputOptions,
                             outputOptions
                         },
-                        this.log, () => this.stopStream(request.sessionID), () => this.emit('stream_error', request.sessionID), undefined);
+                        this.log);
 
-                    this.ongoingSessions.set(request.sessionID, activeSession);
-                    this.pendingSessions.delete(request.sessionID);
+                    stream.attachIncomingProcess(process);
+                    this.requestedStreams.delete(request.sessionID);
+                    this.activeStreams.set(stream.id, stream);
                     callback();
                 })
                 .catch(err => {
@@ -416,60 +390,42 @@ export class StreamingDelegate extends EventEmitter {
                 callback();
                 break;
             case StreamRequestTypes.STOP:
-                this.stopStream(request.sessionID);
+                this.activeStreams.get(request.sessionID)?.end();
+                this.activeStreams.delete(request.sessionID);
+                this.log.info('Stopped video stream.', this.cameraName);
                 callback();
                 break;
         }
     }
 
-    public stopStream(sessionId: string): void {
-        const session = this.ongoingSessions.get(sessionId);
-        if (session) {
-            if (session.timeout) {
-                clearTimeout(session.timeout);
-            }
-            try {
-                session.socket?.close();
-            } catch (err) {
-                this.log.error('Error occurred closing socket: ' + err, this.cameraName);
-            }
-            try {
-                session.mainProcess?.stop();
-            } catch (err) {
-                this.log.error('Error occurred terminating main FFmpeg process: ' + err, this.cameraName);
-            }
-            try {
-                session.returnProcess?.stop();
-            } catch (err) {
-                this.log.error('Error occurred terminating two-way FFmpeg process: ' + err, this.cameraName);
-            }
-        }
-        this.ongoingSessions.delete(sessionId);
-        this.log.info('Stopped video stream.', this.cameraName);
-    }
+    private buildGifStitch(imageUrls: string[]): NamedPromise<string> {
+        const imagePromises = imageUrls.map(imageUrl => loadImage(imageUrl))
+        const promise =
+            new Promise<string>(async (resolve, reject) => {
+                const images = await Promise.all(imagePromises)
+                const {width, height} = {width: images[0].width, height: images[0].height}
+                const {path} = temp.openSync({suffix: '.gif'});
+                this.log.debug(`saving gif as ${path}`);
 
-    private fetchImages(imageUrls: string[]): Promise<string[]> {
-        const imageFilePromises = imageUrls.map( url => {
-            return new Promise<string>((resolve, reject) => {
-                https.get(url, response => {
-                    if (response.aborted || response.statusCode != 200) {
-                        this.log.error(`file download for ${response.url} failed`);
-                        reject();
-                    }
-                    const {path} = temp.openSync({suffix: '.jpg'});
-                    this.log.debug(`saving download as ${path}`);
-                    const stream = fs.createWriteStream(path);
-                    response.pipe(stream);
+                const writeStream = createWriteStream(path)
+                writeStream.on('close', () => resolve(path))
+                writeStream.on('error', err => reject(err))
 
-                    // after download completed close filestream
-                    stream.on("finish", () => {
-                        stream.close();
-                        this.log.debug("Download Completed");
-                        resolve(path);
-                    });
-                })
-            });
-        });
-        return Promise.all(imageFilePromises)
+                const encoder = new GIFEncoder(width, height);
+                encoder.createReadStream().pipe(writeStream)
+                encoder.start();
+                encoder.setRepeat(0);   // 0 for repeat, -1 for no-repeat
+                encoder.setDelay(250);  // frame delay in ms
+
+                const canvas = createCanvas(width, height);
+                const ctx = canvas.getContext('2d')
+                images.forEach(image => {
+                    ctx.drawImage(image, 0, 0, width, height);
+                    encoder.addFrame(ctx);
+                });
+
+                encoder.finish();
+            })
+        return { promise, name: 'buildGifStitch'}
     }
 }

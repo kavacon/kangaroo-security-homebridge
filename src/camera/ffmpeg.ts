@@ -4,6 +4,12 @@ import ffmpeg from "fluent-ffmpeg";
 import {Readable} from "stream";
 import WritableStream = NodeJS.WritableStream;
 import {Buffer} from "buffer";
+import ffmpegPath from "ffmpeg-for-homebridge";
+import ffProbePath from 'ffprobe-static';
+import EventEmitter from "events";
+
+process.env.FFMPEG_PATH = ffmpegPath;
+process.env.FFPROBE_PATH = ffProbePath.path;
 
 export interface FfmpegProcessOptions {
     input: string | Buffer | string[],
@@ -12,11 +18,25 @@ export interface FfmpegProcessOptions {
     outputOptions: string[],
 }
 
-export class FfmpegProcess<T> {
+export enum FfmpegErrorCode {
+    FATAL
+}
+
+export declare interface FfmpegProcess {
+    on(event: 'ffmpeg_error', listener: (process: FfmpegProcess, error: FfmpegErrorCode) => void): this;
+    on(event: 'ffmpeg_finished', listener: () => void): this;
+
+    emit(event: 'ffmpeg_error', process: FfmpegProcess, error: FfmpegErrorCode): boolean;
+    emit(event: 'ffmpeg_finished'): boolean;
+    stop();
+}
+
+class FfmpegProcessImpl extends EventEmitter implements FfmpegProcess {
     private readonly command;
     private killTimeout?: NodeJS.Timeout;
 
-    constructor(cameraName: string, options: FfmpegProcessOptions, log: Logger, onError: CallableFunction, onFailure: CallableFunction, onEnd?: CallableFunction) {
+    constructor(cameraName: string, options: FfmpegProcessOptions, log: Logger) {
+        super()
         log.debug('command: %s %s %s %s', !(options.input instanceof Buffer) && options.input,
             options.inputOptions.join(' '), options.outputOptions?.join(' ') || '',
             typeof options.output == "string" && options.output,
@@ -48,26 +68,22 @@ export class FfmpegProcess<T> {
             })
             .on('error', (error: Error) => {
                 if (error.message.includes('SIGKILL')) {
-                    this.handleKillSignal(log, cameraName, onError, onFailure);
+                    this.handleKillSignal(log, cameraName);
                 } else {
                     log.error('FFmpeg process creation failed: ' + error.message, cameraName);
-                    onError();
-                    onFailure();
+                    this.emit('ffmpeg_error',this, FfmpegErrorCode.FATAL);
                 }
             })
         .on('stderr', (line: string) => {
             if (line.match(/\[(panic|fatal|error)\]/)) { // For now only write anything out when debug is set
                 log.error(line, cameraName);
-                onFailure()
+                this.emit('ffmpeg_error',this, FfmpegErrorCode.FATAL);
             } else {
                 log.debug(line, cameraName);
             }
         })
         .on('end', () => {
-            if (onEnd) {
-                return onEnd();
-            }
-            log.error('Process ended without kill signal, (Error) %s', cameraName);
+            this.emit('ffmpeg_finished');
         });
         this.command.run();
     }
@@ -90,7 +106,7 @@ export class FfmpegProcess<T> {
         return cmd;
     }
 
-    private handleKillSignal(log: Logger, cameraName: string, onError: CallableFunction, onFailure: CallableFunction) {
+    private handleKillSignal(log: Logger, cameraName: string) {
         return () => {
             if (this.killTimeout) {
                 clearTimeout(this.killTimeout);
@@ -102,9 +118,28 @@ export class FfmpegProcess<T> {
                 log.debug(message + ' (Expected)', cameraName);
             } else {
                 log.error(message + ' (Error)', cameraName);
-                onError();
-                onFailure();
+                this.emit('ffmpeg_error',this, FfmpegErrorCode.FATAL);
             }
         }
     }
+}
+
+/**
+ * Self completing ffmpeg process such as a video stitch or image resize. Managed as a promise
+ * as may be long-running but is expected to naturally conclude.
+ */
+export function asyncFfmpeg(cameraName: string, options: FfmpegProcessOptions, log: Logger): Promise<FfmpegProcess> {
+    return new Promise((resolve, reject) => {
+        const process = new FfmpegProcessImpl(cameraName, options, log);
+        process.on('ffmpeg_finished', () => resolve(process));
+        process.on('ffmpeg_error', (error, process) => reject({error, process}));
+    });
+}
+
+/**
+ * An ongoing ffmpeg process. Expected to continue running until purposefully interrupted
+ * either by a failure or explicit stop call.
+ */
+export function liveFfmpeg(cameraName: string, options: FfmpegProcessOptions, log: Logger): FfmpegProcess {
+    return new FfmpegProcessImpl(cameraName, options, log);
 }
