@@ -93,7 +93,7 @@ export class StreamingDelegate extends EventEmitter implements CameraStreamingDe
     requestedStreams: Map<string, SessionInfo> = new Map();
     activeStreams: Map<string, StreamingSession> = new Map();
 
-    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm?: Alarm, options?: VideoStitchOptions,) {
+    constructor(log: Logger, hap: HAP, cameraName: string, initialAlarm?: Alarm, options?: VideoStitchOptions) {
         super();
         this.log = log;
         this.hap = hap;
