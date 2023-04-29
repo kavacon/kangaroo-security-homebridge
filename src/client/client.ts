@@ -47,7 +47,7 @@ export class Client {
                     'X-Authorization': authToken,
                 }, body);
             this.log.info(`Completed ${method} ${url}`);
-            this.log.debug(`Response: ${JSON.stringify(res)}`)
+            this.log.debug(`Response: ${JSON.stringify(res, null, 4)}`)
             return res;
         } catch (err) {
             if (isRetry) {
