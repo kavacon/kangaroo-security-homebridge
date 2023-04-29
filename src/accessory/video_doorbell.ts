@@ -9,6 +9,7 @@ import {
 import {StreamingDelegate} from "../camera/streaming_delegate";
 import {BatteryStatus, Device, DOORBELL_ALARM, MOTION_ALARM} from "../model";
 
+// TODO support dynamically removing motion service when motion detection false
 export class VideoDoorbell extends Accessory {
     private doorbellController?: DoorbellController;
     private cameraStream?: StreamingDelegate;
