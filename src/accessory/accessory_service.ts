@@ -40,8 +40,8 @@ export class AccessoryService {
         switch (device.deviceType) {
             case DeviceType.DOORCAM:
                 const baseAccessory = this.buildBasicAccessory(device, homeId, Categories.VIDEO_DOORBELL)
-                const accessory = new VideoDoorbell(baseAccessory, this.hap, this.log, this.client);
-                accessory.initialise(device, this.config);
+                const accessory = new VideoDoorbell(baseAccessory, device, this.hap, this.log, this.client);
+                accessory.initialise(this.config);
                 this.pendingAccessories.push(accessory);
                 return accessory;
             default:
@@ -58,8 +58,8 @@ export class AccessoryService {
 
             switch (device.deviceType) {
                 case DeviceType.DOORCAM:
-                    const accessory = new VideoDoorbell(baseAccessory, this.hap, this.log, this.client);
-                    accessory.initialise(device, this.config);
+                    const accessory = new VideoDoorbell(baseAccessory, device, this.hap, this.log, this.client);
+                    accessory.initialise(this.config);
                     this.registeredAccessories.push(accessory);
                     return;
                 default:

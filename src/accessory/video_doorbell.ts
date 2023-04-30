@@ -4,27 +4,29 @@ import {
     CameraStreamingDelegate, CharacteristicValue,
     DoorbellController,
     DoorbellOptions,
-    HAP, PlatformConfig
+    HAP,
+    PlatformConfig
 } from "homebridge";
 import {StreamingDelegate} from "../camera/streaming_delegate";
 import {BatteryStatus, Device, DOORBELL_ALARM, MOTION_ALARM} from "../model";
 
 // TODO support dynamically removing motion service when motion detection false
 export class VideoDoorbell extends Accessory {
+
     private doorbellController?: DoorbellController;
     private cameraStream?: StreamingDelegate;
     lastAlarmId?: string
 
-    initialise(device: Device, config: PlatformConfig) {
-        this.addCamera(device);
-        this.addBattery(device);
-        this.cameraStream = new StreamingDelegate(this.log, this.hap, device.deviceName, device.lastAlarm, config.videoStitchOptions);
+    initialise(config: PlatformConfig) {
+        this.addCamera();
+        this.addBattery();
+        this.cameraStream = new StreamingDelegate(this.log, this.hap, this.device.deviceName, this.device.lastAlarm, config.videoStitchOptions);
         this.doorbellController = buildDoorbell(this.hap, this.cameraStream, this.getDeviceId())
         this.cameraStream.on('stream_error', (sessionID) => this.doorbellController?.forceStopStreamingSession(sessionID));
         this.platformAccessory.configureController(this.doorbellController);
     }
 
-    onUpdate(device: Device, homeId: string) {
+    processDeviceUpdate(device: Device) {
         if (device.lastAlarm && device.lastAlarm.alarmId !== this.lastAlarmId) {
             this.lastAlarmId = device.lastAlarm.alarmId;
             this.cameraStream?.updateAlarm(device.lastAlarm);
@@ -54,48 +56,54 @@ export class VideoDoorbell extends Accessory {
         this.doorbellController && this.platformAccessory.removeController(this.doorbellController);
     }
 
-    private addCamera(device: Device) {
+    private addCamera() {
         const previousService = this.platformAccessory.getService(this.hap.Service.CameraOperatingMode)
-        const cameraService = previousService || new this.hap.Service.CameraOperatingMode(device.deviceName);
+        const cameraService = previousService || new this.hap.Service.CameraOperatingMode(this.device.deviceName);
         cameraService
             .getCharacteristic(this.hap.Characteristic.EventSnapshotsActive)
             .removeOnSet()
-            .onSet(this.safeSet(this.handleEventSnapshotsActiveSet.bind(this)))
+            .onSet(this.handleEventSnapshotsActiveSet.bind(this))
             .updateValue(this.hap.Characteristic.EventSnapshotsActive.ENABLE);
         cameraService
             .getCharacteristic(this.hap.Characteristic.HomeKitCameraActive)
             .removeOnGet()
-            .onGet(this.safeGet(this.handleHomeKitCameraActiveGet.bind(this)))
-            .updateValue(device.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF)
+            .onGet(this.loggedGet('HomeKitCameraActive', this.handleHomeKitCameraActiveGet.bind(this)))
+            .updateValue(this.device.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF)
         cameraService
             .getCharacteristic(this.hap.Characteristic.NightVision)
             .removeOnGet()
             .removeOnSet()
-            .onGet(this.safeGet(this.handleHomeKitNightVisionGet.bind(this)))
-            .onSet(this.safeSet(this.handleHomeKitNightVisionSet.bind(this)));
+            .onGet(this.loggedGet('HomeKitNightVision', this.handleHomeKitNightVisionGet.bind(this)))
+            .onSet(this.updatingSet('HomeKitNightVision', this.buildHomeKitNightVisionSetUpdate.bind(this)));
         cameraService.isPrimaryService = true;
         !previousService && this.platformAccessory.addService(cameraService)
     }
 
-    private addBattery(device: Device) {
+    private addBattery() {
         const previousService = this.platformAccessory.getService(this.hap.Service.Battery)
-        const battery = previousService || new this.hap.Service.Battery(device.deviceName);
+        const battery = previousService || new this.hap.Service.Battery(this.device.deviceName);
         battery.getCharacteristic(this.hap.Characteristic.StatusLowBattery)
             .removeOnGet()
-            .onGet(this.safeGet(this.handleStatusLowBatteryGet.bind(this)))
-            .updateValue(device.batteryStatus === BatteryStatus.OK
+            .onGet(this.loggedGet('StatusLowBattery', this.handleStatusLowBatteryGet.bind(this)))
+            .updateValue(this.device.batteryStatus === BatteryStatus.OK
                 ? this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL
                 : this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW
             );
+        battery.getCharacteristic(this.hap.Characteristic.BatteryLevel)
+            .removeOnGet()
+            .onGet(this.loggedGet('BatteryLevel', this.handleBatteryLevelGet.bind(this)))
+            .updateValue(this.device.batteryVolume);
         !previousService && this.platformAccessory.addService(battery);
     }
 
-    private handleStatusLowBatteryGet(): Promise<CharacteristicValue> {
-        const {context} = this.platformAccessory;
-        return this.client.getDevice(context.homeId, context.deviceId)
-            .then(d => d.batteryStatus === BatteryStatus.OK
-                ? this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL
-                : this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);
+    private handleStatusLowBatteryGet(): CharacteristicValue {
+        return this.device.batteryStatus === BatteryStatus.OK
+            ? this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL
+            : this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW;
+    }
+
+    private handleBatteryLevelGet(): CharacteristicValue {
+        return this.device.batteryVolume || 0;
     }
 
     private handleEventSnapshotsActiveSet(value: CharacteristicValue): Promise<void> {
@@ -103,23 +111,16 @@ export class VideoDoorbell extends Accessory {
         return Promise.resolve();
     }
 
-    private handleHomeKitCameraActiveGet(): Promise<CharacteristicValue> {
-        const {context} = this.platformAccessory;
-        return this.client.getDevice(context.homeId, context.deviceId)
-            .then(d => d.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF);
+    private handleHomeKitCameraActiveGet(): CharacteristicValue {
+        return this.device.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF;
     }
 
-    private handleHomeKitNightVisionGet(): Promise<CharacteristicValue> {
-        const {context} = this.platformAccessory;
-        return this.client.getDevice(context.homeId, context.deviceId)
-            .then(d => d.irLed);
+    private handleHomeKitNightVisionGet(): CharacteristicValue {
+        return this.device.irLed;
     }
 
-    private async handleHomeKitNightVisionSet(value: CharacteristicValue): Promise<void> {
-        const {context} = this.platformAccessory;
-        const res = await this.client.updateDeviceCam(context.homeId, context.deviceId, {irLed: !!value});
-        this.log.info(`run set night vision for device ${context.deviceId} requested ${!!value} set ${res.irLed}`);
-        return Promise.resolve()
+    private buildHomeKitNightVisionSetUpdate(value: CharacteristicValue): Partial<Device> {
+        return {irLed: !!value};
     }
 }
 
