@@ -36,7 +36,7 @@ export abstract class Accessory {
 
     protected loggedGet(label: string, getter: () => Nullable<CharacteristicValue>): CharacteristicGetHandler {
         return () => {
-            this.log.info('getting characteristic %s, for %s', label, this.getDeviceId())
+            this.log.info('getting characteristic %s for %s', label, this.platformAccessory.displayName)
             return getter()
         };
     }
@@ -44,7 +44,7 @@ export abstract class Accessory {
     protected updatingSet(label: string, deviceUpdateBuilder: (value) => Partial<Device>): CharacteristicSetHandler {
         const {context} = this.platformAccessory;
         return (value) => {
-            this.log.info(`setting %s for device ${context.deviceId} requested ${!!value}`);
+            this.log.info(`setting ${label} for device ${this.platformAccessory.displayName} requested ${!!value}`);
             return this.client.updateDeviceCam(context.homeId, context.deviceId, deviceUpdateBuilder(value))
                 .then(res => {
                     this.device = res;
