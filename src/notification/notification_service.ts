@@ -1,19 +1,19 @@
-import {Alarm, Device, DOORBELL_ALARM, MOTION_ALARM} from "../model";
+import {Device} from "../model";
 import {Client} from "../client/client";
 import {Logging} from "homebridge";
 import Timeout = NodeJS.Timeout;
 import EventEmitter from "events";
+import {DeviceDeleter, DeviceReceiver} from "./receiver";
+import {Accessory} from "../accessory/accessory";
 
 const POLLING_DURATION_MILLISECONDS = 20000;
 
 export declare interface NotificationService {
-    on<T extends string>(event: `doorbell_ring_${T}`, listener: (alarm: Alarm) => void): this;
-    on<T extends string>(event: `motion_detected_${T}`, listener: (alarm: Alarm) => void): this;
-    on(event: 'new_device', listener: (device: Device, homeId: string) => void): this;
-    on(event: 'removed_device', listener: (device: string) => void): this;
+    on<T extends string>(event: `device_update_${T}`, DeviceReceiver): this;
+    on(event: 'new_device', listener: DeviceReceiver): this;
+    on(event: 'removed_device', listener: DeviceDeleter): this;
 
-    emit<T extends string>(event: `doorbell_ring_${T}`, alarm: Alarm): boolean;
-    emit<T extends string>(event: `motion_detected_${T}`, alarm: Alarm): boolean;
+    emit<T extends string>(event: `device_update_${T}`, device: Device, homeId: string): boolean;
     emit(event: 'new_device', device: Device, homeId: string): boolean
     emit(event: 'removed_device', device: string): boolean
 }
@@ -22,7 +22,6 @@ export class NotificationService extends EventEmitter {
     private readonly log: Logging;
     private readonly client: Client;
     private interval?: Timeout;
-    private readonly lastAlarmByDevice: Map<string, string> = new Map();
     private knownDevices: string[] = [];
 
     constructor(log: Logging, client: Client) {
@@ -33,10 +32,14 @@ export class NotificationService extends EventEmitter {
 
     onShutdown() {
         clearInterval(this.interval);
+        this.removeAllListeners();
     }
 
-    start(devices: string[]) {
-        this.knownDevices.push(...devices)
+    start(accessories: Accessory[]) {
+        accessories.forEach(a => {
+            this.knownDevices.push(a.getDeviceId())
+            this.on(`device_update_${a.getDeviceId()}`, (d, h) => a.onUpdate(d, h))
+        })
         this.interval = setInterval(this.runPoll.bind(this), POLLING_DURATION_MILLISECONDS);
     }
 
@@ -58,6 +61,7 @@ export class NotificationService extends EventEmitter {
     private updateKnownDevices(devices: Device[]) {
         const deviceList = devices.map(d => d.deviceId);
         const staleDevices = this.knownDevices.filter(id => !deviceList.some(d => d === id));
+        staleDevices.forEach(d => this.removeAllListeners(`device_update_${d}`));
         staleDevices.forEach(d => this.emit('removed_device', d));
         this.knownDevices = deviceList;
     }
@@ -65,32 +69,8 @@ export class NotificationService extends EventEmitter {
     private notifyDevice(device: Device, homeId: string) {
         if (!this.knownDevices.some(id => id === device.deviceId)) {
             this.emit('new_device', device, homeId);
-        } else if (device.lastAlarm) {
-            this.notifyAlarm(device.lastAlarm);
-        }
-    }
-
-    private notifyAlarm(alarm: Alarm) {
-        if (!this.lastAlarmByDevice.get(alarm.deviceId)) {
-            this.lastAlarmByDevice.set(alarm.deviceId, alarm.alarmId);
-        }
-        if (this.lastAlarmByDevice.get(alarm.deviceId) === alarm.alarmId) {
-            //ignore alarm already known
-            return;
-        }
-        this.lastAlarmByDevice.set(alarm.deviceId, alarm.alarmId);
-        switch (alarm.alarmType) {
-            case DOORBELL_ALARM:
-                this.log.debug(`emitting notification for doorbell ring for device ${alarm.deviceId}`);
-                this.emit(`doorbell_ring_${alarm.deviceId}`, alarm);
-                return;
-            case MOTION_ALARM:
-                this.log.debug(`emitting notification for motion detected for device ${alarm.deviceId}`);
-                this.emit(`motion_detected_${alarm.deviceId}`, alarm);
-                return;
-            default:
-                this.log.warn(`unable to emit notification for alarm type: ${alarm.alarmType}`);
-                return;
+        } else {
+            this.emit(`device_update_${device.deviceId}`, device, homeId)
         }
     }
 }

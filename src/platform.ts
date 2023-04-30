@@ -20,6 +20,7 @@ export = (api: API) => {
 class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     private readonly log: Logging;
     private readonly api: API;
+    private readonly config: PlatformConfig;
     private readonly accessoryService: AccessoryService;
     private readonly notificationService: NotificationService;
     private readonly client: Client;
@@ -27,6 +28,7 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
     constructor(log: Logging, config: PlatformConfig, api: API) {
         this.log = log;
         this.api = api;
+        this.config = config;
 
         const authManager = new AuthManager(log, config.refreshToken, config.secureTokenKey);
         this.client = new Client(log, authManager);
@@ -36,7 +38,7 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
             register: a => this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, a),
             unregister: a => this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, a),
         }
-        this.accessoryService = new AccessoryService(log, accessoryApi, hap, config, this.client, this.notificationService);
+        this.accessoryService = new AccessoryService(log, accessoryApi, hap, config, this.client);
 
         this.log.info('Kangaroo Security bridge starting up');
         // Only occurs once all existing accessories have been loaded
@@ -46,21 +48,31 @@ class KangarooSecurityPlatform implements DynamicPlatformPlugin {
 
     configureAccessory(accessory: PlatformAccessory<KangarooContext>): void {
         this.log.info('loading saved accessory: [%s]', accessory.displayName);
-        this.accessoryService.updateAccessory(accessory);
+        this.accessoryService.addCachedAccessory(accessory);
     }
 
     private apiDidFinishLaunching() {
         const res = this.client.account();
         res.then( res => {
             res.homes.forEach(
-                home => home.devices.forEach( device => this.accessoryService.fromDevice(device, home.homeId))
+                home => home.devices.forEach( device => this.accessoryService.addDevice(device, home.homeId))
             )
             this.accessoryService.onApiDidFinishLaunching();
         })
             .catch( reason => this.log.error('Error during accessory loading: [%s]', reason))
             .finally(() => {
-                this.notificationService.start(this.accessoryService.getDeviceIds());
+                this.setupNotifications();
             });
+    }
+
+    private setupNotifications() {
+        this.notificationService.on('new_device', (device, homeId) => {
+            const accessory = this.accessoryService.addDevice(device, homeId);
+            accessory && this.notificationService.on(`device_update_${accessory.getDeviceId()}`, (d, h) => accessory.onUpdate(d, h))
+            this.accessoryService.registerPendingAccessories();
+        });
+        this.notificationService.on('removed_device', d => this.accessoryService.removeAccessory(d))
+        this.notificationService.start(this.accessoryService.getRegisteredAccessories());
     }
 
     private shutdown() {

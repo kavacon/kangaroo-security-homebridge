@@ -57,6 +57,7 @@ export interface Device {
     serialNumber: string,
     battery: BatteryStatus,
     batteryStatus: BatteryStatus,
+    batteryVolume: number,
     rssi: number,
     lastSyncTime: string,
     lastUpdate: string,

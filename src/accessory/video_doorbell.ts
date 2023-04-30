@@ -1,186 +1,164 @@
+import {Accessory} from "./accessory";
 import {
     CameraControllerOptions,
-    CameraStreamingDelegate,
-    CharacteristicGetHandler,
-    CharacteristicSetHandler,
-    CharacteristicValue,
+    CameraStreamingDelegate, CharacteristicValue,
     DoorbellController,
     DoorbellOptions,
-    HAP,
-    Logging,
-    Nullable,
-    PlatformAccessory, PlatformConfig,
+    HAP, PlatformConfig
 } from "homebridge";
-import {Alarm, BatteryStatus, Device, KangarooContext} from "../model";
-import {Client} from "../client/client";
-import {StreamingDelegate} from "../camera/streaming_delegate"
-import {NotificationService} from "../notification/notification_service";
+import {StreamingDelegate} from "../camera/streaming_delegate";
+import {BatteryStatus, Device, DOORBELL_ALARM, MOTION_ALARM} from "../model";
 
-export class VideoDoorbellService {
-    private readonly log: Logging;
-    private readonly hap: HAP;
-    private readonly client: Client;
-    private readonly config: PlatformConfig
-    private readonly notificationService: NotificationService;
+// TODO support dynamically removing motion service when motion detection false
+export class VideoDoorbell extends Accessory {
+    private doorbellController?: DoorbellController;
+    private cameraStream?: StreamingDelegate;
+    lastAlarmId?: string
 
-    constructor(log: Logging, hap: HAP, client: Client, config: PlatformConfig, notificationService: NotificationService) {
-        this.log = log;
-        this.hap = hap;
-        this.client = client;
-        this.config = config;
-        this.notificationService = notificationService;
-    }
-    
-    configure(device: Device, accessory: PlatformAccessory<KangarooContext>): { accessory: PlatformAccessory<KangarooContext>, cleanup: () => void } {
-        this.configureCamera(device, accessory);
-        this.configureBattery(device, accessory);
-
-        const delegate = new StreamingDelegate(this.log, this.hap, device.deviceName, device.lastAlarm, this.config.videoStitchOptions);
-        const doorbellOptions = this.getDoorbellControllerOptions(delegate, device.deviceName)
-        const doorbellController = new this.hap.DoorbellController(doorbellOptions);
-        doorbellController.motionService?.getCharacteristic(this.hap.Characteristic.StatusActive).updateValue(true);
-        delegate.on('stream_error', (sessionID) => doorbellController.forceStopStreamingSession(sessionID));
-
-        accessory.configureController(doorbellController);
-        this.configureNotifications(device.deviceId, doorbellController, delegate);
-        return {accessory, cleanup: () => { accessory.removeController(doorbellController); delegate.shutdown() }};
+    initialise(device: Device, config: PlatformConfig) {
+        this.addCamera(device);
+        this.addBattery(device);
+        this.cameraStream = new StreamingDelegate(this.log, this.hap, device.deviceName, device.lastAlarm, config.videoStitchOptions);
+        this.doorbellController = buildDoorbell(this.hap, this.cameraStream, this.getDeviceId())
+        this.cameraStream.on('stream_error', (sessionID) => this.doorbellController?.forceStopStreamingSession(sessionID));
+        this.platformAccessory.configureController(this.doorbellController);
     }
 
-    private configureNotifications(deviceId: string, controller: DoorbellController, delegate: StreamingDelegate) {
-        this.notificationService.on(`doorbell_ring_${deviceId}`, delegate.updateAlarm.bind(delegate));
-        this.notificationService.on(`doorbell_ring_${deviceId}`, _ => controller.ringDoorbell());
-
-        this.notificationService.on(`motion_detected_${deviceId}`, delegate.updateAlarm.bind(delegate));
-        this.notificationService.on(`motion_detected_${deviceId}`, this.motionListener(controller));
-    }
-
-    private motionListener(controller: DoorbellController): (alarm: Alarm) => void {
-        return _ => {
-            controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
-            setTimeout(() =>
-                controller.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(false)
-                , 30000);
+    onUpdate(device: Device, homeId: string) {
+        if (device.lastAlarm && device.lastAlarm.alarmId !== this.lastAlarmId) {
+            this.lastAlarmId = device.lastAlarm.alarmId;
+            this.cameraStream?.updateAlarm(device.lastAlarm);
+            switch (device.lastAlarm.alarmType) {
+                case DOORBELL_ALARM:
+                    this.log.debug(`doorbell ring for device ${this.getDeviceId()}, alarm ${this.lastAlarmId}`);
+                    this.doorbellController?.ringDoorbell();
+                    return;
+                case MOTION_ALARM:
+                    this.log.debug(`motion detected for device ${this.getDeviceId()}, alarm ${this.lastAlarmId}`);
+                    this.doorbellController?.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).sendEventNotification(true);
+                    setTimeout(() =>
+                            this.doorbellController?.motionService?.getCharacteristic(this.hap.Characteristic.MotionDetected).updateValue(false)
+                        , 30000);
+                    return;
+                default:
+                    this.log.warn(`unable to process for alarm type: ${device.lastAlarm.alarmType} for device ${this.getDeviceId()}`);
+                    return;
+            }
         }
     }
 
-    private getDoorbellControllerOptions(delegate: CameraStreamingDelegate, name: string): DoorbellOptions & CameraControllerOptions {
-        return {
-            cameraStreamCount: 2, // HomeKit requires at least 2 streams, but 1 is also just fine
-            delegate: delegate,
-            streamingOptions: {
-                supportedCryptoSuites: [this.hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
-                video: {
-                    resolutions: [
-                        [320, 180, 30],
-                        [320, 240, 15], // Apple Watch requires this configuration
-                        [320, 240, 30],
-                        [480, 270, 30],
-                        [480, 360, 30],
-                        [640, 360, 30],
-                        [640, 480, 30],
-                        [1280, 720, 30],
-                        [1280, 960, 30],
-                        [1920, 1080, 30],
-                        [1600, 1200, 30]
-                    ],
-                    codec: {
-                        profiles: [this.hap.H264Profile.BASELINE, this.hap.H264Profile.MAIN, this.hap.H264Profile.HIGH],
-                        levels: [this.hap.H264Level.LEVEL3_1, this.hap.H264Level.LEVEL3_2, this.hap.H264Level.LEVEL4_0]
-                    }
-                },
-            },
-            sensors: {
-                motion: true
-            },
-            name,
-        };
+    onRemove() {
+        this.cameraStream?.removeAllListeners();
+        this.cameraStream?.shutdown();
+        this.doorbellController?.removeAllListeners()
+        this.doorbellController && this.platformAccessory.removeController(this.doorbellController);
     }
 
-    private configureCamera(device: Device, accessory: PlatformAccessory<KangarooContext>) {
-        const { context } = accessory;
-        const previousService = accessory.getService(this.hap.Service.CameraOperatingMode)
+    private addCamera(device: Device) {
+        const previousService = this.platformAccessory.getService(this.hap.Service.CameraOperatingMode)
         const cameraService = previousService || new this.hap.Service.CameraOperatingMode(device.deviceName);
         cameraService
             .getCharacteristic(this.hap.Characteristic.EventSnapshotsActive)
             .removeOnSet()
-            .onSet(this.setWith(context, this.handleEventSnapshotsActiveSet.bind(this)))
+            .onSet(this.safeSet(this.handleEventSnapshotsActiveSet.bind(this)))
             .updateValue(this.hap.Characteristic.EventSnapshotsActive.ENABLE);
         cameraService
             .getCharacteristic(this.hap.Characteristic.HomeKitCameraActive)
             .removeOnGet()
-            .onGet(this.getWith(context, this.handleHomeKitCameraActiveGet.bind(this)))
+            .onGet(this.safeGet(this.handleHomeKitCameraActiveGet.bind(this)))
             .updateValue(device.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF)
         cameraService
             .getCharacteristic(this.hap.Characteristic.NightVision)
             .removeOnGet()
             .removeOnSet()
-            .onGet(this.getWith(context, this.handleHomeKitNightVisionGet.bind(this)))
-            .onSet(this.setWith(context, this.handleHomeKitNightVisionSet.bind(this)));
+            .onGet(this.safeGet(this.handleHomeKitNightVisionGet.bind(this)))
+            .onSet(this.safeSet(this.handleHomeKitNightVisionSet.bind(this)));
         cameraService.isPrimaryService = true;
-        !previousService && accessory.addService(cameraService)
+        !previousService && this.platformAccessory.addService(cameraService)
     }
 
-    private configureBattery(device: Device, accessory: PlatformAccessory<KangarooContext>) {
-        const { context } = accessory;
-        const previousService = accessory.getService(this.hap.Service.Battery)
+    private addBattery(device: Device) {
+        const previousService = this.platformAccessory.getService(this.hap.Service.Battery)
         const battery = previousService || new this.hap.Service.Battery(device.deviceName);
         battery.getCharacteristic(this.hap.Characteristic.StatusLowBattery)
             .removeOnGet()
-            .onGet(this.getWith(context, this.handleStatusLowBatteryGet.bind(this)))
+            .onGet(this.safeGet(this.handleStatusLowBatteryGet.bind(this)))
             .updateValue(device.batteryStatus === BatteryStatus.OK
                 ? this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL
                 : this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW
             );
-        !previousService && accessory.addService(battery);
+        !previousService && this.platformAccessory.addService(battery);
     }
 
-    private getWith(context: KangarooContext, getter: (context: KangarooContext) => Promise<Nullable<CharacteristicValue>>): CharacteristicGetHandler {
-        return () => {
-            this.log.info('getting characteristic for %s', context.deviceId)
-            return getter(context)
-                .catch(reason => {
-                    this.log.error('failed to get characteristic value for %s with error %s', context.deviceId, reason);
-                    return null
-                })
-        };
-    }
-
-    private setWith(context: KangarooContext, setter: (value: CharacteristicValue, context: KangarooContext) => Promise<Nullable<CharacteristicValue> | void>): CharacteristicSetHandler {
-        return (value) => {
-            this.log.info('setting characteristic for %s', context.deviceId)
-            return setter(value, context)
-                .catch(reason => {
-                    this.log.error('failed to set characteristic value %s for %s with error %s', value, context.deviceId, reason);
-                    return null
-                })
-        };
-    }
-
-    private handleStatusLowBatteryGet(context: KangarooContext):  Promise<CharacteristicValue> {
+    private handleStatusLowBatteryGet(): Promise<CharacteristicValue> {
+        const {context} = this.platformAccessory;
         return this.client.getDevice(context.homeId, context.deviceId)
             .then(d => d.batteryStatus === BatteryStatus.OK
                 ? this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL
                 : this.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);
     }
 
-    private handleEventSnapshotsActiveSet(value: CharacteristicValue, context: KangarooContext): Promise<void> {
-        this.log.info(`request set event snapshots active for device ${context.deviceId}`);
+    private handleEventSnapshotsActiveSet(value: CharacteristicValue): Promise<void> {
+        this.log.info(`request set event snapshots active for device ${this.getDeviceId()}`);
         return Promise.resolve();
     }
 
-    private handleHomeKitCameraActiveGet(context: KangarooContext): Promise<CharacteristicValue> {
+    private handleHomeKitCameraActiveGet(): Promise<CharacteristicValue> {
+        const {context} = this.platformAccessory;
         return this.client.getDevice(context.homeId, context.deviceId)
             .then(d => d.online ? this.hap.Characteristic.HomeKitCameraActive.ON : this.hap.Characteristic.HomeKitCameraActive.OFF);
     }
 
-    private handleHomeKitNightVisionGet(context: KangarooContext): Promise<CharacteristicValue> {
+    private handleHomeKitNightVisionGet(): Promise<CharacteristicValue> {
+        const {context} = this.platformAccessory;
         return this.client.getDevice(context.homeId, context.deviceId)
             .then(d => d.irLed);
     }
 
-    private async handleHomeKitNightVisionSet(value: CharacteristicValue, context: KangarooContext): Promise<void> {
+    private async handleHomeKitNightVisionSet(value: CharacteristicValue): Promise<void> {
+        const {context} = this.platformAccessory;
         const res = await this.client.updateDeviceCam(context.homeId, context.deviceId, {irLed: !!value});
         this.log.info(`run set night vision for device ${context.deviceId} requested ${!!value} set ${res.irLed}`);
         return Promise.resolve()
     }
+}
+
+function buildDoorbell(hap: HAP, cameraStream: CameraStreamingDelegate, device: string) {
+    const doorbellOptions = buildCameraDoorbellOptions(hap, cameraStream, device)
+    const doorbellController = new hap.DoorbellController(doorbellOptions);
+    doorbellController.motionService?.getCharacteristic(hap.Characteristic.StatusActive).updateValue(true);
+    return doorbellController;
+}
+
+function buildCameraDoorbellOptions(hap: HAP, delegate: CameraStreamingDelegate, name: string): DoorbellOptions & CameraControllerOptions {
+    return {
+        cameraStreamCount: 2, // HomeKit requires at least 2 streams, but 1 is also just fine
+        delegate: delegate,
+        streamingOptions: {
+            supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
+            video: {
+                resolutions: [
+                    [320, 180, 30],
+                    [320, 240, 15], // Apple Watch requires this configuration
+                    [320, 240, 30],
+                    [480, 270, 30],
+                    [480, 360, 30],
+                    [640, 360, 30],
+                    [640, 480, 30],
+                    [1280, 720, 30],
+                    [1280, 960, 30],
+                    [1920, 1080, 30],
+                    [1600, 1200, 30]
+                ],
+                codec: {
+                    profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
+                    levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0]
+                }
+            },
+        },
+        sensors: {
+            motion: true
+        },
+        name,
+    };
 }
