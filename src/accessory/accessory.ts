@@ -14,10 +14,12 @@ export abstract class Accessory {
     readonly platformAccessory: PlatformAccessory<KangarooContext>
     protected readonly hap: HAP;
     protected readonly log: Logging;
-    protected readonly client: Client
+    private readonly client: Client
+    protected device: Device;
 
-    constructor(platformAccessory: PlatformAccessory<KangarooContext>, hap: HAP, log: Logging, client: Client) {
+    constructor(platformAccessory: PlatformAccessory<KangarooContext>, device: Device, hap: HAP, log: Logging, client: Client) {
         this.platformAccessory = platformAccessory;
+        this.device = device;
         this.hap = hap;
         this.log = log;
         this.client = client;
@@ -26,22 +28,27 @@ export abstract class Accessory {
     getDeviceId(): string {
         return this.platformAccessory.context.deviceId;
     }
+    onUpdate(device: Device, homeId: string) {
+        this.log.info(`update received for device ${device.deviceId} ${device.deviceName}`);
+        this.device = device;
+        this.processDeviceUpdate(device)
+    }
 
-    protected safeGet(getter: () => Promise<Nullable<CharacteristicValue>>): CharacteristicGetHandler {
+    protected loggedGet(label: string, getter: () => Nullable<CharacteristicValue>): CharacteristicGetHandler {
         return () => {
-            this.log.info('getting characteristic for %s', this.getDeviceId())
+            this.log.info('getting characteristic %s for %s', label, this.platformAccessory.displayName)
             return getter()
-                .catch(reason => {
-                    this.log.error('failed to get characteristic value for %s with error %s', this.getDeviceId(), reason);
-                    return null
-                })
         };
     }
 
-    protected safeSet(setter: (value: CharacteristicValue) => Promise<Nullable<CharacteristicValue> | void>): CharacteristicSetHandler {
+    protected updatingSet(label: string, deviceUpdateBuilder: (value) => Partial<Device>): CharacteristicSetHandler {
+        const {context} = this.platformAccessory;
         return (value) => {
-            this.log.info('setting characteristic for %s', this.getDeviceId())
-            return setter(value)
+            this.log.info(`setting ${label} for device ${this.platformAccessory.displayName} requested ${!!value}`);
+            return this.client.updateDeviceCam(context.homeId, context.deviceId, deviceUpdateBuilder(value))
+                .then(res => {
+                    this.device = res;
+                })
                 .catch(reason => {
                     this.log.error('failed to set characteristic value %s for %s with error %s', value, this.getDeviceId(), reason);
                     return null
@@ -49,9 +56,9 @@ export abstract class Accessory {
         };
     }
 
-    abstract initialise(device: Device, config?: PlatformConfig);
+    abstract initialise(config?: PlatformConfig);
 
-    abstract onUpdate(device: Device, homeId: string): void;
+    protected abstract processDeviceUpdate(device: Device): void;
 
     abstract onRemove(): void;
 }
